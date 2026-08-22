@@ -195,7 +195,9 @@ fn attach_scroll_action(
             let direction = match mouse.kind {
                 MouseEventKind::ScrollUp => AttachScrollDirection::Up,
                 MouseEventKind::ScrollDown => AttachScrollDirection::Down,
-                _ => return Some(AttachInputAction::None),
+                // Clicks and motion belong on the pane PTY. Returning None
+                // lets filter_input forward the raw SGR bytes.
+                _ => return None,
             };
             Some(AttachInputAction::Scroll {
                 source: AttachScrollSource::Wheel,
@@ -358,8 +360,8 @@ fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
 /// Sets up a direct attach terminal.
 ///
 /// Direct attach forwards stdin to the attached PTY. When configured, mouse
-/// capture lets wheel events drive the attached viewport or reach child
-/// programs that requested mouse input.
+/// capture lets wheel events drive the attached viewport and forwards click
+/// and motion reports to child programs that requested mouse input.
 fn setup_direct_attach_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
     setup_terminal_with_capabilities(false, mouse_capture)
 }
@@ -3221,12 +3223,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn attach_escape_swallows_non_wheel_mouse_reports() {
+    fn attach_escape_forwards_non_wheel_mouse_reports() {
         let mut escape = AttachEscapeState::default();
-        assert!(matches!(
-            escape.filter_input(b"\x1b[<0;11;6M".to_vec(), 24, 7),
-            AttachInputAction::None
-        ));
+        match escape.filter_input(b"\x1b[<0;11;6M".to_vec(), 24, 7) {
+            AttachInputAction::Forward(bytes) => assert_eq!(bytes, b"\x1b[<0;11;6M"),
+            other => panic!("expected forwarded mouse report, got {other:?}"),
+        }
     }
 
     #[cfg(unix)]

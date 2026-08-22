@@ -24,9 +24,7 @@ fn notification_show(args: &[String]) -> std::io::Result<i32> {
     let params = match parse_notification_show_args(args) {
         Ok(params) => params,
         Err(NotificationShowArgError::Usage) => {
-            eprintln!(
-                "usage: herdr notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
-            );
+            super::eprint_usage("notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]");
             return Ok(2);
         }
         Err(NotificationShowArgError::Message(message)) => {

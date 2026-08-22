@@ -1099,7 +1099,7 @@ pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOption
         match arg.as_str() {
             "--handoff" => options.live_handoff = true,
             "--help" | "-h" => {
-                return Err("usage: herdr update [--handoff]".to_string());
+                return Err(crate::identity::usage("update [--handoff]"));
             }
             _ => return Err(format!("unknown update option: {arg}")),
         }

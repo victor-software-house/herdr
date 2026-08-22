@@ -42,10 +42,10 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             return Ok(args.to_vec());
         }
         let Some(name) = args.get(3) else {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err(crate::identity::usage("session attach <name>"));
         };
         if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err(crate::identity::usage("session attach <name>"));
         }
         apply_explicit_name(name)?;
         return Ok(cleaned);

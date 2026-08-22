@@ -567,10 +567,9 @@ fn config_check_rejects_json_output() {
 
     assert_eq!(checked.status.code(), Some(2));
     assert!(checked.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&checked.stderr),
-        "usage: herdr config check\n"
-    );
+    let stderr = String::from_utf8_lossy(&checked.stderr);
+    assert!(stderr.starts_with("usage: "));
+    assert!(stderr.contains("config check"));
 
     cleanup_test_base(&base);
 }

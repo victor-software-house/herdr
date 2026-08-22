@@ -3,7 +3,7 @@ use std::io::Write;
 use clap::{Arg, ArgAction, ArgGroup, Command, ValueHint};
 
 pub(super) fn command() -> Command {
-    let command = Command::new("herdr")
+    let command = Command::new(crate::identity::APP_NAME)
         .about("terminal workspace manager for AI coding agents")
         .disable_help_flag(true)
         .disable_version_flag(true)
@@ -53,7 +53,7 @@ fn configure_help(command: Command, depth: usize) -> Command {
         command.disable_help_flag(false)
     };
     let command = if depth == 1 && command.has_subcommands() {
-        command.after_help(super::AGENT_HELP_FOOTER)
+        command.after_help(crate::identity::agent_help_footer())
     } else {
         command
     };
@@ -1322,14 +1322,17 @@ mod tests {
         for group in ["agent", "pane", "workspace", "terminal"] {
             let help = long_help(&[group]);
             assert!(
-                help.contains(super::super::AGENT_HELP_FOOTER),
-                "herdr {group} is missing agent resources: {help}"
+                help.contains(&crate::identity::agent_help_footer()),
+                "{APP_NAME} {group} is missing agent resources: {help}",
+                APP_NAME = crate::identity::APP_NAME,
+                group = group,
+                help = help
             );
         }
 
         let leaf = long_help(&["agent", "wait"]);
         assert!(
-            !leaf.contains(super::super::AGENT_HELP_FOOTER),
+            !leaf.contains(&crate::identity::agent_help_footer()),
             "leaf help should stay focused: {leaf}"
         );
     }

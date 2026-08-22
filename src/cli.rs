@@ -7,6 +7,7 @@ use crate::api::schema::{
     AgentStatus, ClientWindowTitleSetParams, EmptyParams, Method, PaneAgentState, ReadFormat,
     ReadSource, Request, SplitDirection,
 };
+use crate::identity::APP_NAME;
 
 macro_rules! print {
     ($($arg:tt)*) => {{
@@ -40,18 +41,13 @@ mod workspace;
 mod worktree;
 
 const TERMINAL_SESSION_OBSERVE_USAGE: &str =
-    "usage: herdr terminal session observe <target> [--cols N] [--rows N]";
+    "terminal session observe <target> [--cols N] [--rows N]";
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
-    "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
-pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
-    "Are you an AI? Use these resources ONLY IF your task specifically asks you to:\n",
-    "  Help a human understand or set up Herdr for the first time:\n",
-    "    https://herdr.dev/agent-guide.md\n",
-    "  Debug or investigate a problem with Herdr:\n",
-    "    https://herdr.dev/llms.txt\n",
-    "  Control Herdr panes, agents, or workspaces:\n",
-    "    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill",
-);
+    "terminal session control <target> [--takeover] [--cols N] [--rows N]";
+
+pub(super) fn eprint_usage(spec: &str) {
+    eprint_usage("{spec}");
+}
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
     let Some((key, value)) = raw.split_once('=') else {
@@ -150,7 +146,7 @@ fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
 
 fn channel_set(args: &[String]) -> std::io::Result<i32> {
     let Some(channel) = parse_channel_set_arg(args) else {
-        eprintln!("usage: herdr channel set <stable|preview>");
+        eprint_usage("channel set <stable|preview>");
         return Ok(2);
     };
 
@@ -283,11 +279,11 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
     match args {
         [] => {}
         [flag] if matches!(flag.as_str(), "help" | "--help" | "-h") => {
-            eprintln!("usage: herdr config check");
+            eprint_usage("config check");
             return Ok(0);
         }
         _ => {
-            eprintln!("usage: herdr config check");
+            eprint_usage("config check");
             return Ok(2);
         }
     }
@@ -307,7 +303,7 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
 
 fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: herdr config reset-keys");
+        eprint_usage("config reset-keys");
         return Ok(2);
     }
 
@@ -442,15 +438,15 @@ fn session_attach_help(args: &[String]) -> std::io::Result<i32> {
         args.first().map(String::as_str),
         Some("help" | "--help" | "-h")
     ) {
-        eprintln!("usage: herdr session attach <name>");
+        eprint_usage("session attach <name>");
         return Ok(0);
     }
-    eprintln!("usage: herdr session attach <name>");
+    eprint_usage("session attach <name>");
     Ok(2)
 }
 
 fn session_list(args: &[String]) -> std::io::Result<i32> {
-    let json = match parse_session_json_only(args, "usage: herdr session list [--json]") {
+    let json = match parse_session_json_only(args, "session list [--json]") {
         Ok(json) => json,
         Err(code) => return Ok(code),
     };
@@ -468,7 +464,7 @@ fn session_list(args: &[String]) -> std::io::Result<i32> {
 
 fn session_stop(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session stop <name> [--json]") {
+        match parse_session_name_and_json(args, "session stop <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -501,7 +497,7 @@ fn session_stop(args: &[String]) -> std::io::Result<i32> {
 
 fn session_delete(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session delete <name> [--json]") {
+        match parse_session_name_and_json(args, "session delete <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -528,7 +524,7 @@ fn session_delete(args: &[String]) -> std::io::Result<i32> {
 fn terminal_attach(args: &[String]) -> std::io::Result<i32> {
     let (terminal_id, takeover) = match parse_attach_target(
         args,
-        "usage: herdr terminal attach <terminal_id> [--takeover]",
+        "terminal attach <terminal_id> [--takeover]",
     ) {
         Ok(parsed) => parsed,
         Err(code) => return Ok(code),
@@ -542,13 +538,13 @@ fn terminal_session(args: &[String]) -> std::io::Result<i32> {
         Some("control") => terminal_session_control(&args[1..]),
         Some("observe") => terminal_session_observe(&args[1..]),
         Some("help" | "--help" | "-h") => {
-            eprintln!("{TERMINAL_SESSION_CONTROL_USAGE}");
-            eprintln!("{TERMINAL_SESSION_OBSERVE_USAGE}");
+            eprint_usage(TERMINAL_SESSION_CONTROL_USAGE);
+            eprint_usage(TERMINAL_SESSION_OBSERVE_USAGE);
             Ok(0)
         }
         _ => {
-            eprintln!("{TERMINAL_SESSION_CONTROL_USAGE}");
-            eprintln!("{TERMINAL_SESSION_OBSERVE_USAGE}");
+            eprint_usage(TERMINAL_SESSION_CONTROL_USAGE);
+            eprint_usage(TERMINAL_SESSION_OBSERVE_USAGE);
             Ok(2)
         }
     }
@@ -606,11 +602,11 @@ fn parse_terminal_session_options(
         args.first().map(|arg| arg.as_str()),
         Some("help" | "--help" | "-h")
     ) {
-        eprintln!("{usage}");
+        eprint_usage(usage);
         return Ok(Err(0));
     }
     let Some(target) = args.first() else {
-        eprintln!("{usage}");
+        eprint_usage(usage);
         return Ok(Err(2));
     };
 
@@ -626,7 +622,7 @@ fn parse_terminal_session_options(
             }
             "--cols" => {
                 let Some(value) = args.get(i + 1) else {
-                    eprintln!("{usage}");
+                    eprint_usage(usage);
                     return Ok(Err(2));
                 };
                 cols = parse_terminal_dimension(value, "--cols")?;
@@ -634,19 +630,19 @@ fn parse_terminal_session_options(
             }
             "--rows" => {
                 let Some(value) = args.get(i + 1) else {
-                    eprintln!("{usage}");
+                    eprint_usage(usage);
                     return Ok(Err(2));
                 };
                 rows = parse_terminal_dimension(value, "--rows")?;
                 i += 2;
             }
             "help" | "--help" | "-h" => {
-                eprintln!("{usage}");
+                eprint_usage(usage);
                 return Ok(Err(0));
             }
             other => {
                 eprintln!("unknown terminal session {command} option: {other}");
-                eprintln!("{usage}");
+                eprint_usage(usage);
                 return Ok(Err(2));
             }
         }
@@ -680,7 +676,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
     match args.first().map(|arg| arg.as_str()) {
         Some("set") => {
             if args.len() != 2 {
-                eprintln!("usage: herdr terminal title set <title>");
+                eprint_usage("terminal title set <title>");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -692,7 +688,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
         }
         Some("clear") => {
             if args.len() != 1 {
-                eprintln!("usage: herdr terminal title clear");
+                eprint_usage("terminal title clear");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -701,21 +697,21 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
             })?)
         }
         Some("help" | "--help" | "-h") => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
+            eprint_usage("terminal title set <title>");
+            eprintln!("       {APP_NAME} terminal title clear");
             Ok(0)
         }
         _ => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
+            eprint_usage("terminal title set <title>");
+            eprintln!("       {APP_NAME} terminal title clear");
             Ok(2)
         }
     }
 }
 
-pub(super) fn parse_attach_target(args: &[String], usage: &str) -> Result<(String, bool), i32> {
+pub(super) fn parse_attach_target(args: &[String], spec: &str) -> Result<(String, bool), i32> {
     let Some(target) = args.first() else {
-        eprintln!("{usage}");
+        eprint_usage(spec);
         return Err(2);
     };
     let mut takeover = false;
@@ -723,7 +719,7 @@ pub(super) fn parse_attach_target(args: &[String], usage: &str) -> Result<(Strin
         match arg.as_str() {
             "--takeover" => takeover = true,
             "help" | "--help" | "-h" => {
-                eprintln!("{usage}");
+                eprint_usage(spec);
                 return Err(0);
             }
             other => {
@@ -950,18 +946,18 @@ pub(super) fn expand_equals_args(args: &[String], value_options: &[&str]) -> Vec
     expanded
 }
 
-fn parse_session_json_only(args: &[String], usage: &str) -> Result<bool, i32> {
+fn parse_session_json_only(args: &[String], spec: &str) -> Result<bool, i32> {
     match args {
         [] => Ok(false),
         [flag] if flag == "--json" => Ok(true),
         _ => {
-            eprintln!("{usage}");
+            eprint_usage(spec);
             Err(2)
         }
     }
 }
 
-fn parse_session_name_and_json(args: &[String], usage: &str) -> Result<(String, bool), i32> {
+fn parse_session_name_and_json(args: &[String], spec: &str) -> Result<(String, bool), i32> {
     let mut name = None;
     let mut json = false;
     for arg in args {
@@ -970,13 +966,13 @@ fn parse_session_name_and_json(args: &[String], usage: &str) -> Result<(String, 
         } else if name.is_none() {
             name = Some(arg.clone());
         } else {
-            eprintln!("{usage}");
+            eprint_usage(spec);
             return Err(2);
         }
     }
 
     let Some(name) = name else {
-        eprintln!("{usage}");
+        eprint_usage(spec);
         return Err(2);
     };
     Ok((name, json))

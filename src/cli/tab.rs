@@ -125,11 +125,11 @@ fn tab_create(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_get(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_tab_id) = args.first() else {
-        eprintln!("usage: herdr tab get <tab_id>");
+        super::eprint_usage("tab get <tab_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr tab get <tab_id>");
+        super::eprint_usage("tab get <tab_id>");
         return Ok(2);
     }
 
@@ -138,11 +138,11 @@ fn tab_get(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_tab_id) = args.first() else {
-        eprintln!("usage: herdr tab focus <tab_id>");
+        super::eprint_usage("tab focus <tab_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr tab focus <tab_id>");
+        super::eprint_usage("tab focus <tab_id>");
         return Ok(2);
     }
 
@@ -151,7 +151,7 @@ fn tab_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_rename(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr tab rename <tab_id> <label>");
+        super::eprint_usage("tab rename <tab_id> <label>");
         return Ok(2);
     }
 
@@ -163,11 +163,11 @@ fn tab_rename(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_close(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_tab_id) = args.first() else {
-        eprintln!("usage: herdr tab close <tab_id>");
+        super::eprint_usage("tab close <tab_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr tab close <tab_id>");
+        super::eprint_usage("tab close <tab_id>");
         return Ok(2);
     }
 

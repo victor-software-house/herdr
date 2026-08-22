@@ -81,11 +81,11 @@ fn pane_list(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_get(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane get <pane_id>");
+        super::eprint_usage("pane get <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr pane get <pane_id>");
+        super::eprint_usage("pane get <pane_id>");
         return Ok(2);
     }
 
@@ -287,8 +287,7 @@ fn parse_pane_neighbor_args(args: &[String]) -> Result<PaneNeighborParams, Strin
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane neighbor --direction left|right|up|down [--pane ID|--current]"
-                .into(),
+            crate::identity::usage("pane neighbor --direction left|right|up|down [--pane ID|--current]"),
         );
     };
 
@@ -297,7 +296,7 @@ fn parse_pane_neighbor_args(args: &[String]) -> Result<PaneNeighborParams, Strin
 
 fn parse_pane_focus_args(args: &[String]) -> Result<PaneFocusDirectionParams, String> {
     let params = parse_pane_neighbor_args(args).map_err(|_| {
-        "usage: herdr pane focus --direction left|right|up|down [--pane ID|--current]".to_string()
+        crate::identity::usage("pane focus --direction left|right|up|down [--pane ID|--current]")
     })?;
     Ok(PaneFocusDirectionParams {
         pane_id: params.pane_id,
@@ -350,8 +349,7 @@ fn parse_pane_resize_args(args: &[String]) -> Result<PaneResizeParams, String> {
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
-                .into(),
+            crate::identity::usage("pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"),
         );
     };
 
@@ -433,11 +431,11 @@ fn parse_pane_zoom_args(args: &[String]) -> Result<PaneZoomParams, String> {
 
 fn pane_rename(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane rename <pane_id> <label>|--clear");
+        super::eprint_usage("pane rename <pane_id> <label>|--clear");
         return Ok(2);
     };
     if args.len() < 2 {
-        eprintln!("usage: herdr pane rename <pane_id> <label>|--clear");
+        super::eprint_usage("pane rename <pane_id> <label>|--clear");
         return Ok(2);
     }
     let label = if args.len() == 2 && args[1] == "--clear" {
@@ -470,7 +468,7 @@ fn pane_read(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn parse_pane_read_args(args: &[String]) -> Result<PaneReadParams, String> {
-    const USAGE: &str = "usage: herdr pane read <pane_id> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi] [--raw]";
+    let usage = crate::identity::usage("pane read <pane_id> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi] [--raw]");
 
     let args = super::expand_equals_args(args, &["--source", "--lines", "--format"]);
     let mut pane_id = None;
@@ -527,7 +525,7 @@ fn parse_pane_read_args(args: &[String]) -> Result<PaneReadParams, String> {
     }
 
     let Some(pane_id) = pane_id else {
-        return Err(USAGE.into());
+        return Err(usage);
     };
 
     Ok(PaneReadParams {
@@ -559,7 +557,7 @@ fn parse_pane_input_args(
     env_pane_id: Option<&str>,
 ) -> Result<PaneInputSetParams, String> {
     const USAGE: &str =
-        "usage: herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane";
+        "pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane";
 
     let args = super::expand_equals_args(args, &["--pane", "--right-click"]);
     let mut pane_id = None;
@@ -607,8 +605,8 @@ fn parse_pane_input_args(
     }
 
     Ok(PaneInputSetParams {
-        pane_id: pane_id.ok_or(USAGE)?,
-        right_click: right_click.ok_or(USAGE)?,
+        pane_id: pane_id.ok_or_else(|| crate::identity::usage(USAGE))?,
+        right_click: right_click.ok_or_else(|| crate::identity::usage(USAGE))?,
     })
 }
 
@@ -730,8 +728,7 @@ fn parse_pane_split_args(
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
-                .into(),
+            crate::identity::usage("pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"),
         );
     };
 
@@ -916,8 +913,10 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
 }
 
 fn pane_move_usage() -> String {
-    "usage: herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
-        .into()
+    let bin = crate::identity::APP_NAME;
+    format!(
+        "usage: {bin} pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       {bin} pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       {bin} pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
+    )
 }
 
 fn parse_pane_swap_args(args: &[String]) -> Result<PaneSwapParams, String> {
@@ -980,10 +979,12 @@ fn parse_pane_swap_args(args: &[String]) -> Result<PaneSwapParams, String> {
                 ..PaneSwapParams::default()
             })
         }
-        _ => Err(
-            "usage: herdr pane swap --direction left|right|up|down [--pane ID|--current]\n       herdr pane swap --source-pane ID --target-pane ID"
-                .into(),
-        ),
+        _ => Err({
+            let bin = crate::identity::APP_NAME;
+            format!(
+                "usage: {bin} pane swap --direction left|right|up|down [--pane ID|--current]\n       {bin} pane swap --source-pane ID --target-pane ID"
+            )
+        }),
     }
 }
 
@@ -1011,11 +1012,11 @@ fn parse_pane_direction(value: &str) -> Result<PaneDirection, String> {
 
 fn pane_close(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane close <pane_id>");
+        super::eprint_usage("pane close <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr pane close <pane_id>");
+        super::eprint_usage("pane close <pane_id>");
         return Ok(2);
     }
 
@@ -1024,7 +1025,7 @@ fn pane_close(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr pane send-text <pane_id> <text>");
+        super::eprint_usage("pane send-text <pane_id> <text>");
         return Ok(2);
     }
 
@@ -1035,7 +1036,7 @@ fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr pane send-keys <pane_id> <key> [key ...]");
+        super::eprint_usage("pane send-keys <pane_id> <key> [key ...]");
         return Ok(2);
     }
 
@@ -1046,7 +1047,7 @@ fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_run(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr pane run <pane_id> <command>");
+        super::eprint_usage("pane run <pane_id> <command>");
         return Ok(2);
     }
 
@@ -1075,7 +1076,7 @@ fn pane_wait_output(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParams, String> {
-    const USAGE: &str = "usage: herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]";
+    let usage = crate::identity::usage("pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");
 
     let args = super::expand_equals_args(
         args,
@@ -1148,7 +1149,7 @@ fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParam
         }
     }
     let Some(pane_id) = pane_id else {
-        return Err(USAGE.into());
+        return Err(usage);
     };
     let Some(matcher) = matcher else {
         return Err("missing required --match or --regex".into());
@@ -1165,7 +1166,7 @@ fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParam
 
 fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
+        super::eprint_usage("pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
         return Ok(2);
     };
 
@@ -1274,7 +1275,7 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE]");
+        super::eprint_usage("pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE]");
         return Ok(2);
     };
 
@@ -1371,7 +1372,7 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
+        super::eprint_usage("pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
         return Ok(2);
     };
 
@@ -1436,7 +1437,7 @@ fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+        super::eprint_usage("pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
         return Ok(2);
     };
 
@@ -1834,7 +1835,7 @@ mod tests {
         ]))
         .unwrap_err();
 
-        assert!(err.contains("usage: herdr pane swap"));
+        assert!(err.contains(&crate::identity::usage("pane swap")));
     }
 
     #[test]
@@ -1871,7 +1872,7 @@ mod tests {
         let err =
             parse_pane_move_args(&args(&["issue-1", "--target-pane", "issue-2"])).unwrap_err();
 
-        assert!(err.contains("usage: herdr pane move"));
+        assert!(err.contains(&crate::identity::usage("pane move")));
     }
 
     #[test]

@@ -66,6 +66,7 @@ mod detect;
 mod events;
 mod ghostty;
 mod handoff_runtime;
+mod identity;
 mod input;
 mod integration;
 mod ipc;
@@ -495,7 +496,10 @@ fn random_nested_message() -> &'static str {
 
 fn exit_if_nested_disabled(config: &config::Config) {
     if should_block_nested(config) {
-        eprintln!("\x1b[1merror:\x1b[0m nested herdr is disabled by default.");
+        eprintln!(
+            "\x1b[1merror:\x1b[0m nested {} is disabled by default.",
+            crate::identity::APP_NAME
+        );
         eprintln!("see configuration if you want to enable it.");
         eprintln!();
         eprintln!("\x1b[2m\"{}\"\x1b[0m", random_nested_message());
@@ -521,7 +525,10 @@ fn main() -> io::Result<()> {
         Ok(args) => args,
         Err(err) => {
             eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!(
+                "run '{} --help' for usage",
+                crate::identity::APP_NAME
+            );
             std::process::exit(2);
         }
     };
@@ -552,7 +559,10 @@ fn main() -> io::Result<()> {
         })
     {
         eprintln!("error: --remote can only be used with the default launch command");
-        eprintln!("run 'herdr --help' for usage");
+        eprintln!(
+            "run '{} --help' for usage",
+            crate::identity::APP_NAME
+        );
         std::process::exit(2);
     }
 
@@ -596,7 +606,7 @@ fn main() -> io::Result<()> {
             }
             Err(err) => {
                 eprintln!("{err}");
-                eprintln!("usage: herdr update [--handoff]");
+                eprintln!("{}", crate::identity::usage("update [--handoff]"));
                 std::process::exit(2);
             }
         };
@@ -614,91 +624,94 @@ fn main() -> io::Result<()> {
     }
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
+        let bin = crate::identity::APP_NAME;
         platform::begin_cli_output();
-        println!("herdr — terminal workspace manager for AI coding agents");
+        println!("{bin} — terminal workspace manager for AI coding agents");
         println!();
-        println!("Usage: herdr [options]");
-        println!("       herdr --session <name> [options]");
-        println!("       herdr --remote <ssh-target> [--session <name>]");
-        println!("       herdr session attach <name>");
-        println!("       herdr completion zsh");
-        println!("       herdr update [--handoff]");
-        println!("       herdr channel set <stable|preview>");
-        println!("       herdr server stop");
-        println!("       herdr server reload-config");
-        println!("       herdr api <subcommand> ...");
-        println!("       herdr completion <shell>");
-        println!("       herdr config <subcommand> ...");
-        println!("       herdr channel <subcommand> ...");
-        println!("       herdr workspace <subcommand> ...");
-        println!("       herdr worktree <subcommand> ...");
-        println!("       herdr tab <subcommand> ...");
-        println!("       herdr notification <subcommand> ...");
-        println!("       herdr agent <subcommand> ...");
-        println!("       herdr pane <subcommand> ...");
-        println!("       herdr session <subcommand> ...");
-        println!("       herdr integration <subcommand> ...");
+        println!("Usage: {bin} [options]");
+        println!("       {bin} --session <name> [options]");
+        println!("       {bin} --remote <ssh-target> [--session <name>]");
+        println!("       {bin} session attach <name>");
+        println!("       {bin} terminal attach <terminal_id>");
+        println!("       {bin} agent attach <target>");
+        println!("       {bin} completion zsh");
+        println!("       {bin} update [--handoff]");
+        println!("       {bin} channel set <stable|preview>");
+        println!("       {bin} server stop");
+        println!("       {bin} server reload-config");
+        println!("       {bin} api <subcommand> ...");
+        println!("       {bin} completion <shell>");
+        println!("       {bin} config <subcommand> ...");
+        println!("       {bin} channel <subcommand> ...");
+        println!("       {bin} workspace <subcommand> ...");
+        println!("       {bin} worktree <subcommand> ...");
+        println!("       {bin} tab <subcommand> ...");
+        println!("       {bin} notification <subcommand> ...");
+        println!("       {bin} agent <subcommand> ...");
+        println!("       {bin} pane <subcommand> ...");
+        println!("       {bin} session <subcommand> ...");
+        println!("       {bin} integration <subcommand> ...");
         println!();
         println!("Common commands:");
         for (command, description) in [
-            ("herdr", "Launch or attach to the persistent session"),
+            (bin.to_string(), "Launch or attach to the persistent session"),
             (
-                "herdr status [server|client]",
+                format!("{bin} status [server|client]"),
                 "Show local client and running server status",
             ),
-            ("herdr update", "Download and install the latest version"),
-            ("herdr completion zsh", "Generate shell completions for zsh"),
+            (format!("{bin} update"), "Download and install the latest version"),
+            (format!("{bin} completion zsh"), "Generate shell completions for zsh"),
             (
-                "herdr server stop",
+                format!("{bin} server stop"),
                 "Stop the running server via the API socket",
             ),
             (
-                "herdr channel set <stable|preview>",
+                format!("{bin} channel set <stable|preview>"),
                 "Choose the stable or preview update channel",
             ),
             (
-                "herdr server reload-config",
+                format!("{bin} server reload-config"),
                 "Reload config.toml in the running server",
             ),
             (
-                "herdr config reset-keys",
+                format!("{bin} config reset-keys"),
                 "Back up config.toml and remove custom keybindings",
             ),
             (
-                "herdr channel <subcommand>",
+                format!("{bin} channel <subcommand>"),
                 "Manage the stable or preview update channel",
             ),
             (
-                "herdr api <subcommand>",
+                format!("{bin} api <subcommand>"),
                 "Inspect socket API metadata and live runtime state",
             ),
             (
-                "herdr workspace <subcommand>",
+                format!("{bin} workspace <subcommand>"),
                 "Workspace helpers over the socket API",
             ),
             (
-                "herdr worktree <subcommand>",
+                format!("{bin} worktree <subcommand>"),
                 "Git worktree helpers over the socket API",
             ),
-            ("herdr tab <subcommand>", "Tab helpers over the socket API"),
+            (format!("{bin} tab <subcommand>"), "Tab helpers over the socket API"),
             (
-                "herdr notification <subcommand>",
+                format!("{bin} notification <subcommand>"),
                 "Notification helpers over the socket API",
             ),
             (
-                "herdr agent <subcommand>",
+                format!("{bin} agent <subcommand>"),
                 "Agent/terminal helpers over the socket API",
             ),
             (
-                "herdr pane <subcommand>",
+                format!("{bin} pane <subcommand>"),
                 "Pane control helpers over the socket API",
             ),
             (
-                "herdr session <subcommand>",
+                format!("{bin} session <subcommand>"),
                 "Manage named persistent sessions",
             ),
             (
-                "herdr integration <subcommand>",
+                format!("{bin} integration <subcommand>"),
                 "Manage built-in agent integrations",
             ),
         ] {
@@ -706,7 +719,7 @@ fn main() -> io::Result<()> {
         }
         println!();
         println!("Advanced commands:");
-        println!("  {:<32} Run as headless server", "herdr server");
+        println!("  {:<32} Run as headless server", format!("{bin} server"));
         println!();
         println!("Options:");
         println!("  --no-session        Run monolithically (no server/client, escape hatch)");
@@ -723,15 +736,14 @@ fn main() -> io::Result<()> {
         println!("Config: {}", config::config_path().display());
         println!("Logs:   {}", logging::help_log_paths_summary());
         println!("Env:    HERDR_CONFIG_PATH overrides config file path");
-        println!("Home:   https://herdr.dev");
         println!();
-        println!("{}", cli::AGENT_HELP_FOOTER);
+        println!("{}", crate::identity::agent_help_footer());
         return Ok(());
     }
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
         platform::begin_cli_output();
-        println!("herdr {}", crate::build_info::version());
+        println!("{} {}", crate::identity::APP_NAME, crate::build_info::version());
         return Ok(());
     }
 

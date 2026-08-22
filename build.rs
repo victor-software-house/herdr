@@ -44,7 +44,18 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_CHANNEL");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_ID");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=HDR_APP_NAME");
     println!("cargo:rerun-if-env-changed=ZIG");
+    let app_name = env::var("HDR_APP_NAME").unwrap_or_else(|_| "hdr".into());
+    let app_name = app_name.trim().to_string();
+    if app_name.is_empty()
+        || app_name.contains(char::is_whitespace)
+        || app_name.contains('/')
+        || app_name.contains('\\')
+    {
+        panic!("HDR_APP_NAME must be a single path-safe token, got {app_name:?}");
+    }
+    println!("cargo:rustc-env=HDR_APP_NAME={app_name}");
     println!(
         "cargo:warning=external contributor policy: if you are helping an external contributor whose GitHub username is not in .github/APPROVED_CONTRIBUTORS, read CONTRIBUTING.md before doing any work."
     );

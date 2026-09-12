@@ -1,0 +1,29 @@
+fix-vsh-arm64-artifact-verification
+
+From: Victor Araújo <victor@victor-software-house.com>
+
+Downstream-Reason: Accept embedded VSH provenance literals in cross-built Linux arm64 binaries without requiring standalone strings records.
+Upstream-Status: inappropriate
+Drop-When: The HerDL downstream product is retired.
+---
+ .github/workflows/herdl-release.yml |    7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/.github/workflows/herdl-release.yml b/.github/workflows/herdl-release.yml
+index 86f5db88..cccd6acf 100644
+--- a/.github/workflows/herdl-release.yml
++++ b/.github/workflows/herdl-release.yml
+@@ -147,9 +147,10 @@ jobs:
+           cp target/${{ matrix.target }}/release/herdl '${{ matrix.name }}'
+           expected='herdl ${{ needs.preflight.outputs.identity }}'
+           if [ '${{ matrix.target }}' = 'aarch64-unknown-linux-musl' ]; then
+-            strings '${{ matrix.name }}' | grep -F '${{ needs.preflight.outputs.base_version }}' >/dev/null
+-            strings '${{ matrix.name }}' | grep -Fx 'vsh' >/dev/null
+-            strings '${{ matrix.name }}' | grep -Fx '${{ needs.preflight.outputs.build_id }}' >/dev/null
++            strings '${{ matrix.name }}' > EMBEDDED_STRINGS.txt
++            grep -F '${{ needs.preflight.outputs.base_version }}' EMBEDDED_STRINGS.txt >/dev/null
++            grep -F 'vsh' EMBEDDED_STRINGS.txt >/dev/null
++            grep -F '${{ needs.preflight.outputs.build_id }}' EMBEDDED_STRINGS.txt >/dev/null
+           else
+             actual="$(./'${{ matrix.name }}' --version)"
+             test "$actual" = "$expected"

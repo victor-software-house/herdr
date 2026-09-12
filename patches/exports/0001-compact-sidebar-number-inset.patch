@@ -1,0 +1,136 @@
+compact-sidebar-number-inset
+
+From: Victor Araújo <victor@victor-software-house.com>
+
+Downstream-Reason: Inset compact sidebar workspace and agent numbers by one cell so they do not touch the terminal edge.
+Upstream-Status: not-submitted
+Drop-When: Upstream compact sidebar numbers include an equivalent leading inset and aligned status column.
+---
+ src/client/shell/config.rs                         |    2 -
+ src/client/shell/sidebar.rs                        |   16 ++++----
+ .../shell/tests/agents_worktrees_notifications.rs  |   41 +++++++++++++++++++-
+ 3 files changed, 48 insertions(+), 11 deletions(-)
+
+diff --git a/src/client/shell/config.rs b/src/client/shell/config.rs
+index 222e027e..8e07658d 100644
+--- a/src/client/shell/config.rs
++++ b/src/client/shell/config.rs
+@@ -377,7 +377,7 @@ impl ClientShellConfig {
+ 
+         let sidebar_width = if sidebar_collapsed {
+             match self.sidebar_collapsed_mode {
+-                SidebarCollapsedModeConfig::Compact => 4,
++                SidebarCollapsedModeConfig::Compact => 5,
+                 SidebarCollapsedModeConfig::Hidden => 0,
+             }
+         } else {
+diff --git a/src/client/shell/sidebar.rs b/src/client/shell/sidebar.rs
+index c002fd62..494b63e9 100644
+--- a/src/client/shell/sidebar.rs
++++ b/src/client/shell/sidebar.rs
+@@ -70,18 +70,18 @@ pub(crate) fn render_collapsed_sidebar(
+         };
+         put_text(
+             buffer,
+-            rect.x,
++            rect.x.saturating_add(1),
+             rect.y,
+-            rect.width.min(2),
++            rect.width.saturating_sub(1).min(2),
+             &format!("{:<2}", index + 1),
+             number_style,
+         );
+         let status = workspace.agent_status;
+         put_text(
+             buffer,
+-            rect.x.saturating_add(2),
++            rect.x.saturating_add(3),
+             rect.y,
+-            rect.width.saturating_sub(2),
++            rect.width.saturating_sub(3),
+             status_icon(status, config.status_indicators),
+             Style::default().fg(status_color(status, palette)),
+         );
+@@ -134,9 +134,9 @@ pub(crate) fn render_collapsed_sidebar(
+         }
+         put_text(
+             buffer,
+-            rect.x,
++            rect.x.saturating_add(1),
+             rect.y,
+-            rect.width.min(2),
++            rect.width.saturating_sub(1).min(2),
+             &format!("{:<2}", index + 1),
+             Style::default().fg(if agent.focused {
+                 palette.text
+@@ -146,9 +146,9 @@ pub(crate) fn render_collapsed_sidebar(
+         );
+         put_text(
+             buffer,
+-            rect.x.saturating_add(2),
++            rect.x.saturating_add(3),
+             rect.y,
+-            rect.width.saturating_sub(2),
++            rect.width.saturating_sub(3),
+             status_icon(agent.agent_status, config.status_indicators),
+             Style::default().fg(status_color(agent.agent_status, palette)),
+         );
+diff --git a/src/client/shell/tests/agents_worktrees_notifications.rs b/src/client/shell/tests/agents_worktrees_notifications.rs
+index 8b4cc8bd..1e26d4f3 100644
+--- a/src/client/shell/tests/agents_worktrees_notifications.rs
++++ b/src/client/shell/tests/agents_worktrees_notifications.rs
+@@ -49,6 +49,36 @@ fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
+     ));
+ }
+ 
++#[test]
++fn collapsed_sidebar_insets_single_and_double_digit_workspace_numbers() {
++    let mut projected = snapshot();
++    for number in 2..=10 {
++        let mut workspace = projected.workspaces[0].clone();
++        workspace.workspace_id = format!("ws_{number}");
++        workspace.number = number;
++        workspace.label = format!("workspace-{number}");
++        workspace.focused = false;
++        projected.workspaces.push(workspace);
++    }
++
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.sidebar_collapsed = true;
++    state.set_snapshot(Box::new(projected));
++    state.set_pane_surface(surface());
++    let frame = state.compose(106, 30).expect("collapsed sidebar");
++    let buffer = frame.to_ratatui_buffer().expect("collapsed sidebar buffer");
++
++    let first = state.hits.workspaces[0].rect;
++    assert_eq!(buffer[(first.x, first.y)].symbol(), " ");
++    assert_eq!(buffer[(first.x + 1, first.y)].symbol(), "1");
++    assert_eq!(buffer[(first.x + 2, first.y)].symbol(), " ");
++
++    let tenth = state.hits.workspaces[9].rect;
++    assert_eq!(buffer[(tenth.x, tenth.y)].symbol(), " ");
++    assert_eq!(buffer[(tenth.x + 1, tenth.y)].symbol(), "1");
++    assert_eq!(buffer[(tenth.x + 2, tenth.y)].symbol(), "0");
++}
++
+ #[test]
+ fn collapsed_workspace_jitter_remains_a_click() {
+     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+@@ -567,8 +597,15 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
+         .expect("blocked compact agent")
+         .0;
+     let row_start = blocked.y as usize * compact.width as usize + blocked.x as usize;
+-    assert_ne!(compact.cells[row_start].fg, compact.cells[row_start + 2].fg);
+-    assert_eq!(compact.cells[row_start].bg, compact.cells[row_start + 2].bg);
++    assert_eq!(compact.cells[row_start].symbol, " ");
++    assert_ne!(
++        compact.cells[row_start + 1].fg,
++        compact.cells[row_start + 3].fg
++    );
++    assert_eq!(
++        compact.cells[row_start + 1].bg,
++        compact.cells[row_start + 3].bg
++    );
+ }
+ 
+ #[test]

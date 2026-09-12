@@ -1,0 +1,61 @@
+%YAML 1.2
+---
+schema: 1
+downstream:
+  remote: origin
+  branch: master
+  recovery_tag_prefix: forkctl/recovery
+upstream:
+  remote: upstream
+  url: https://github.com/herdrdev/herdr.git
+  fetch_ref: refs/heads/master
+base:
+  target:
+    kind: commit
+    selector: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+    commit: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+  canonical: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+  stack: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+documents:
+  ledger: patches/LEDGER.md
+  exports: patches/exports
+bookkeeping_patch: fork-bookkeeping
+patches:
+  - name: compact-sidebar-number-inset
+    kind: source
+    purpose: >-
+      Inset compact sidebar workspace and agent numbers by one cell so they do not
+      touch the terminal edge.
+    upstream_status: not-submitted
+    drop_when: >-
+      Upstream compact sidebar numbers include an equivalent leading inset and
+      aligned status column.
+    scope:
+      - src/client/shell/config.rs
+      - src/client/shell/sidebar.rs
+      - src/client/shell/tests/agents_worktrees_notifications.rs
+  - name: task-ledger
+    kind: tooling
+    purpose: >-
+      Track the downstream Herdr patch plan and validation order in a qctl-owned
+      repository queue.
+    upstream_status: "inappropriate: downstream-only fork maintenance"
+    drop_when: The downstream fork is retired.
+    scope:
+      - tasks.yaml
+  - name: fork-bookkeeping
+    kind: tooling
+    purpose: Own fork policy, generated evidence, and integration configuration.
+    upstream_status: "inappropriate: downstream-only fork maintenance"
+    drop_when: The downstream fork is retired.
+    scope:
+      - patches/fork.yaml
+      - patches/LEDGER.md
+      - patches/exports/**
+      - patches/**
+      - mise.toml
+disabled_patches: []
+history: []
+contracts:
+  allow_base: []
+  required_text: []

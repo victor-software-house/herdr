@@ -1,0 +1,7 @@
+min_version = "2026.7.7"
+
+[task_config]
+includes = [
+  "git::https://github.com/victor-software-house/forkctl.git//tasks/fork?ref=v0.0.24",
+  "git::https://github.com/victor-software-house/qctl.git//tasks/q?ref=v0.4.0",
+]

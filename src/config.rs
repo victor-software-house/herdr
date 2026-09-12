@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
+mod inheritance;
 mod io;
 mod keybinds;
 mod model;
@@ -41,6 +42,7 @@ pub use self::{
 pub(crate) use self::keybinds::parse_key_combo;
 pub(crate) use self::write::{update_file_at, write_edit, ConfigEdit};
 pub(crate) use self::{
+    inheritance::effective_config_contains_section,
     io::upsert_top_level_bool,
     tab_bar::{
         parse_tab_bar_datetime_format, tab_bar_right_diagnostics,

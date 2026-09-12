@@ -343,10 +343,20 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     };
 
     if !table.contains_key("keys") {
-        println!(
-            "No [keys] config found in {}. Built-in v2 keybindings already apply.",
-            path.display()
-        );
+        match crate::config::effective_config_contains_section(&path, "keys") {
+            Ok(true) => println!(
+                "No local [keys] config found in {}. Inherited keybindings remain active; edit the parent or override them in this file.",
+                path.display()
+            ),
+            Ok(false) => println!(
+                "No [keys] config found in {}. Built-in v2 keybindings already apply.",
+                path.display()
+            ),
+            Err(error) => {
+                eprintln!("cannot resolve inherited keybindings: {error}");
+                return Ok(1);
+            }
+        }
         return Ok(0);
     }
 

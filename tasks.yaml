@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/victor-software-house/qctl/main/schema/tasks.schema.json
+schema_version: 3
+prefix: HDR
+active: HDR-001
+queue:
+  - id: HDR-001
+    title: Inset compact sidebar numbers
+    scope: client shell sidebar
+    outcome: Collapsed workspace and agent numbers have one leading cell, retain both digits, and keep status icons aligned.
+    blocked_by: []
+    acceptance:
+      - 'Compact sidebar width is five cells: one inset, two number cells, one status cell, one separator.'
+      - Workspace and agent renderer tests cover the inset and one/two-digit positions.
+      - The forkctl patch compact-sidebar-number-inset is complete and passes remote pinned-toolchain validation.
+    patch: compact-sidebar-number-inset
+    notes: Reproduced in Herdr 0.9.0 preview inside Ghostty; global terminal padding is not the fix.
+
+  - id: HDR-002
+    title: Tighten tab label spacing
+    scope: client shell tab bar
+    outcome: Tabs use one leading and one trailing cell with no extra blank inter-tab column, preserving mouse hit areas, overflow, scrolling, and drag insertion.
+    blocked_by:
+      - HDR-001
+    acceptance:
+      - Desired tab width is display width plus two, subject to the existing minimum width.
+      - Adjacent tab hit rectangles are contiguous and labels render with one cell on each side.
+      - Overflow, centered scroll, new-tab control, mouse clicks, and drag insertion tests pass.
+    patch: compact-tab-spacing
+
+  - id: HDR-003
+    title: Validate and install downstream Herdr from portable
+    scope: remote validation and local install
+    outcome: macbook-portable builds and tests the exact forkctl stack; the verified binary is installed on this Mac without local compilation.
+    blocked_by:
+      - HDR-002
+    acceptance:
+      - Portable checks out the exact downstream commit and uses Rust 1.96.1.
+      - Focused sidebar and tab tests, pinned lint, forkctl check, and release build pass on portable.
+      - The transferred binary hash matches the portable release artifact and money-hunks visually confirms both patches.
+archive: []
+horizon: []

@@ -70,18 +70,18 @@ pub(crate) fn render_collapsed_sidebar(
         };
         put_text(
             buffer,
-            rect.x,
+            rect.x.saturating_add(1),
             rect.y,
-            rect.width.min(2),
+            rect.width.saturating_sub(1).min(2),
             &format!("{:<2}", index + 1),
             number_style,
         );
         let status = workspace.agent_status;
         put_text(
             buffer,
-            rect.x.saturating_add(2),
+            rect.x.saturating_add(3),
             rect.y,
-            rect.width.saturating_sub(2),
+            rect.width.saturating_sub(3),
             status_icon(status, config.status_indicators),
             Style::default().fg(status_color(status, palette)),
         );
@@ -134,9 +134,9 @@ pub(crate) fn render_collapsed_sidebar(
         }
         put_text(
             buffer,
-            rect.x,
+            rect.x.saturating_add(1),
             rect.y,
-            rect.width.min(2),
+            rect.width.saturating_sub(1).min(2),
             &format!("{:<2}", index + 1),
             Style::default().fg(if agent.focused {
                 palette.text
@@ -146,9 +146,9 @@ pub(crate) fn render_collapsed_sidebar(
         );
         put_text(
             buffer,
-            rect.x.saturating_add(2),
+            rect.x.saturating_add(3),
             rect.y,
-            rect.width.saturating_sub(2),
+            rect.width.saturating_sub(3),
             status_icon(agent.agent_status, config.status_indicators),
             Style::default().fg(status_color(agent.agent_status, palette)),
         );

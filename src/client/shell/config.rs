@@ -377,7 +377,7 @@ impl ClientShellConfig {
 
         let sidebar_width = if sidebar_collapsed {
             match self.sidebar_collapsed_mode {
-                SidebarCollapsedModeConfig::Compact => 4,
+                SidebarCollapsedModeConfig::Compact => 5,
                 SidebarCollapsedModeConfig::Hidden => 0,
             }
         } else {

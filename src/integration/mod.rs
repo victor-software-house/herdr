@@ -22,47 +22,47 @@ pub(crate) use registry::{
 };
 pub(crate) use types::{IntegrationRecommendation, IntegrationStatus, IntegrationStatusKind};
 
-const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
-const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");
+const PI_EXTENSION_INSTALL_NAME: &str = "herdl-agent-state.ts";
+const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdl-agent-state.ts");
 const PI_INTEGRATION_VERSION: u32 = 9;
-const OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
-const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdr-agent-state.ts");
+const OMP_EXTENSION_INSTALL_NAME: &str = "herdl-omp-agent-state.ts";
+const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdl-agent-state.ts");
 const OMP_INTEGRATION_VERSION: u32 = 9;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/claude/herdr-agent-state.ps1")
+    include_str!("assets/claude/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/claude/herdr-agent-state.sh")
+    include_str!("assets/claude/herdl-agent-state.sh")
 };
 const CLAUDE_INTEGRATION_VERSION: u32 = 9;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const CODEX_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/codex/herdr-agent-state.ps1")
+    include_str!("assets/codex/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/codex/herdr-agent-state.sh")
+    include_str!("assets/codex/herdl-agent-state.sh")
 };
 const CODEX_INTEGRATION_VERSION: u32 = 8;
 const KIMI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const KIMI_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/kimi/herdr-agent-state.ps1")
+    include_str!("assets/kimi/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/kimi/herdr-agent-state.sh")
+    include_str!("assets/kimi/herdl-agent-state.sh")
 };
 const KIMI_INTEGRATION_VERSION: u32 = 7;
-const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr kimi integration";
-const KIMI_CONFIG_BLOCK_END: &str = "# <<< herdr kimi integration";
+const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdl kimi integration";
+const KIMI_CONFIG_BLOCK_END: &str = "# <<< herdl kimi integration";
 const KIMI_MIN_VERSION: &str = "0.14.0";
 const KIMI_ASK_USER_QUESTION_MATCHER: &str = "^AskUserQuestion$";
 const KIMI_OTHER_TOOL_MATCHER: &str = "^(?!AskUserQuestion$).*$";
@@ -93,14 +93,14 @@ const KIMI_HOOK_EVENTS: [(&str, Option<&str>, &str); 12] = [
     ("Interrupt", None, "idle"),
 ];
 const COPILOT_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const COPILOT_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/copilot/herdr-agent-state.ps1")
+    include_str!("assets/copilot/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/copilot/herdr-agent-state.sh")
+    include_str!("assets/copilot/herdl-agent-state.sh")
 };
 const COPILOT_INTEGRATION_VERSION: u32 = 3;
 const COPILOT_HOOK_EVENTS: [&str; 1] = ["SessionStart"];
@@ -116,14 +116,14 @@ const COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS: [&str; 9] = [
     "sessionStart",
 ];
 const DEVIN_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const DEVIN_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/devin/herdr-agent-state.ps1")
+    include_str!("assets/devin/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/devin/herdr-agent-state.sh")
+    include_str!("assets/devin/herdl-agent-state.sh")
 };
 const DEVIN_INTEGRATION_VERSION: u32 = 2;
 const DEVIN_HOOK_EVENTS: [(&str, &str); 6] = [
@@ -143,14 +143,14 @@ const DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 6] = [
     ("SessionEnd", "release"),
 ];
 const DROID_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const DROID_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/droid/herdr-agent-state.ps1")
+    include_str!("assets/droid/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/droid/herdr-agent-state.sh")
+    include_str!("assets/droid/herdl-agent-state.sh")
 };
 const DROID_INTEGRATION_VERSION: u32 = 3;
 const DROID_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
@@ -165,45 +165,45 @@ const DROID_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 9] = [
     ("PreCompact", "working"),
     ("SessionEnd", "release"),
 ];
-const OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
-const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-state.js");
-const OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "herdr-tui-session.js";
-const OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
-const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-tui-session.js");
-const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "herdr-opencode";
-const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./herdr-opencode";
+const OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdl-agent-state.js";
+const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdl-agent-state.js");
+const OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "herdl-tui-session.js";
+const OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdl-tui-session.js";
+const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdl-tui-session.js");
+const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "herdl-opencode";
+const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./herdl-opencode";
 const OPENCODE_V2_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/tui.js");
 const OPENCODE_INTEGRATION_VERSION: u32 = 12;
-const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
-const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
+const KILO_PLUGIN_INSTALL_NAME: &str = "herdl-agent-state.js";
+const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdl-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 4;
-const HERMES_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state";
+const HERMES_PLUGIN_INSTALL_NAME: &str = "herdl-agent-state";
 const HERMES_PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";
 const HERMES_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/hermes/plugin.yaml");
 const HERMES_PLUGIN_INIT_ASSET: &str = include_str!("assets/hermes/__init__.py");
 const HERMES_INTEGRATION_VERSION: u32 = 5;
 const QODERCLI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const QODERCLI_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/qodercli/herdr-agent-state.ps1")
+    include_str!("assets/qodercli/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/qodercli/herdr-agent-state.sh")
+    include_str!("assets/qodercli/herdl-agent-state.sh")
 };
 const QODERCLI_INTEGRATION_VERSION: u32 = 3;
 const QODERCLI_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
 const QWEN_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-session.ps1"
+    "herdl-agent-session.ps1"
 } else {
-    "herdr-agent-session.sh"
+    "herdl-agent-session.sh"
 };
 const QWEN_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/qwen/herdr-agent-session.ps1")
+    include_str!("assets/qwen/herdl-agent-session.ps1")
 } else {
-    include_str!("assets/qwen/herdr-agent-session.sh")
+    include_str!("assets/qwen/herdl-agent-session.sh")
 };
 const QWEN_INTEGRATION_VERSION: u32 = 1;
 const QWEN_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
@@ -222,30 +222,30 @@ const QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("SessionEnd", "release"),
 ];
 const CURSOR_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const CURSOR_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/cursor/herdr-agent-state.ps1")
+    include_str!("assets/cursor/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/cursor/herdr-agent-state.sh")
+    include_str!("assets/cursor/herdl-agent-state.sh")
 };
 const CURSOR_INTEGRATION_VERSION: u32 = 1;
 #[cfg(windows)]
-const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.ps1";
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdl-agent-state.ps1";
 #[cfg(not(windows))]
-const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdl-agent-state.sh";
 #[cfg(windows)]
 const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
-    include_str!("assets/antigravity_cli/herdr-agent-state.ps1");
+    include_str!("assets/antigravity_cli/herdl-agent-state.ps1");
 #[cfg(not(windows))]
 const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
-    include_str!("assets/antigravity_cli/herdr-agent-state.sh");
+    include_str!("assets/antigravity_cli/herdl-agent-state.sh");
 const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 3;
 /// Antigravity CLI keys `hooks.json` by hook name, so every Herdr entry lives
 /// under one Herdr-owned block that install rewrites and uninstall removes.
-const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdr";
+const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdl";
 const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
 /// `(event, reported action)`. Session-only: `PreInvocation` is the only event
 /// we need because it carries `conversationId`. The others cannot express
@@ -257,16 +257,16 @@ const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
 /// events accept a `matcher`/`hooks` wrapper, and sending one here would
 /// invalidate the whole file.
 const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 1] = [("PreInvocation", "session")];
-const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
+const INTEGRATION_VERSION_MARKER: &str = "HERDL_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
 const MASTRACODE_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/mastracode/herdr-agent-state.ps1")
+    include_str!("assets/mastracode/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/mastracode/herdr-agent-state.sh")
+    include_str!("assets/mastracode/herdl-agent-state.sh")
 };
 const MASTRACODE_INTEGRATION_VERSION: u32 = 2;
 const MASTRACODE_HOOK_TIMEOUT_MS: u64 = 10_000;
@@ -286,15 +286,15 @@ const MASTRACODE_HOOK_EVENTS: [(&str, &str); 11] = [
     ("Stop", "idle"),
 ];
 const GROK_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "herdl-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "herdl-agent-state.sh"
 };
-const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdr.json";
+const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdl.json";
 const GROK_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/grok/herdr-agent-state.ps1")
+    include_str!("assets/grok/herdl-agent-state.ps1")
 } else {
-    include_str!("assets/grok/herdr-agent-state.sh")
+    include_str!("assets/grok/herdl-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 1;
 

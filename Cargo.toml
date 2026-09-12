@@ -12,7 +12,7 @@ include = [
     "src/**/*",
     "assets/sounds/*",
     "docs/next/api/herdr-api.schema.json",
-    "skills/herdr/SKILL.md",
+    "skills/herdl/SKILL.md",
     "distribution/install.ps1",
     "README.md",
     "LICENSE",

@@ -72,6 +72,7 @@ is_dep: bool = false,
 
 /// Environmental properties
 env: *const std.process.Environ.Map,
+target_libc: ?[]const u8 = null,
 
 pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Config {
     // Setup our standard Zig target and optimize options, i.e.
@@ -176,6 +177,11 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
         .wasm_target = wasm_target,
         .is_dep = is_dep,
         .env = env,
+        .target_libc = b.option(
+            []const u8,
+            "target-libc",
+            "Libc configuration file applied only to target artifacts.",
+        ),
     };
 
     //---------------------------------------------------------------

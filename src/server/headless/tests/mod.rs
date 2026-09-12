@@ -4967,7 +4967,7 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
         .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
         agent: "codex".into(),
         argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
-        dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+        dedupe_key: "herdl:codex\0codex\0Id\0codex-session".into(),
     });
 
     server.render_and_stream();
@@ -6108,7 +6108,7 @@ fn update_notification_reaches_client_shell_independent_of_delivery() {
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
+        install_command: "herdl update".into(),
     });
 
     assert!(changed);
@@ -6145,7 +6145,7 @@ fn update_notification_is_semantic_for_system_delivery() {
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
+        install_command: "herdl update".into(),
     });
 
     assert!(changed);
@@ -6159,10 +6159,10 @@ fn update_notification_is_semantic_for_system_delivery() {
                 notification.kind,
                 protocol::SemanticNotificationKind::UpdateInstalled
             );
-            assert_eq!(notification.title, "Herdr v9.9.9 available");
+            assert_eq!(notification.title, "HerDL v9.9.9 available");
             assert_eq!(
                 notification.body.as_deref(),
-                Some("detach, run `herdr update`, then run Herdr again to reconnect")
+                Some("detach, run `herdl update`, then run HerDL again to reconnect")
             );
         }
         other => panic!("expected semantic update notification, got {other:?}"),
@@ -6510,7 +6510,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
         .get_mut(&terminal_id)
         .unwrap()
         .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:pi".into(),
+            source: "herdl:pi".into(),
             agent: "pi".into(),
             session_ref: crate::agent_resume::AgentSessionRef::path(
                 std::env::current_dir()
@@ -6528,7 +6528,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
         .get_mut(&terminal_id)
         .unwrap()
         .set_hook_authority(
-            "herdr:pi".into(),
+            "herdl:pi".into(),
             "pi".into(),
             crate::detect::AgentState::Working,
             None,
@@ -6558,7 +6558,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
             id: "stale".into(),
             method: api::schema::Method::PaneReportAgent(api::schema::PaneReportAgentParams {
                 pane_id: public_pane_id,
-                source: "herdr:pi".into(),
+                source: "herdl:pi".into(),
                 agent: "pi".into(),
                 state: api::schema::PaneAgentState::Idle,
                 message: None,

@@ -6,8 +6,8 @@ const NESTED_HERDR_MESSAGES: [&str; 6] = [
     "inception detected. we need to go deeper... said no one ever.",
     "recursion is a pathway to many abilities some consider to be... unnatural.",
     "you were so preoccupied with whether you could, you didn't stop to think if you should. — dr. malcolm",
-    "recursive herdring is disabled. somewhere, a call stack breathes a sigh of relief.",
-    "recursive descent denied. there is, in fact, such a thing as too much herdr.",
+    "recursive HerDL is disabled. somewhere, a call stack breathes a sigh of relief.",
+    "recursive descent denied. there is, in fact, such a thing as too much HerDL.",
     "recursion detected. base case not found. aborting.",
 ];
 
@@ -75,7 +75,7 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 #                  vesper
 # name = "catppuccin"
 
-# Follow host terminal light/dark appearance and switch Herdr UI themes.
+# Follow host terminal light/dark appearance and switch HerDL UI themes.
 # Existing manual behavior is unchanged unless this is true.
 # auto_switch = false
 # dark_name = "catppuccin"
@@ -112,23 +112,22 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 
 # CWD policy for new panes, tabs, and workspaces when no explicit --cwd is provided.
 # Use "follow" to inherit the source pane/workspace, "home" for $HOME,
-# "current" for Herdr's process directory, or a fixed path such as "~/Projects".
+# "current" for HerDL's process directory, or a fixed path such as "~/Projects".
 # new_cwd = "follow"
 
 # Render pane images in Kitty graphics-compatible outer terminals.
 # kitty_graphics = true
 
 [update]
-# Update channel used by background version checks and `herdr update`.
-# Stable builds default to "stable". Windows preview builds default to "preview"
-# so existing preview installs stay there until explicitly switched.
+# Update channel used by background version checks and `herdl update`.
+# HerDL update channels remain unavailable until the VSH release channel is published.
 # channel = "stable"
 
-# Check herdr.dev for new Herdr versions in the background.
-# version_check = true
+# Automatic version checks are disabled until the VSH release channel is published.
+# version_check = false
 
-# Check herdr.dev for remote agent-detection manifest updates in the background.
-# manifest_check = true
+# Automatic manifest checks are disabled until the VSH catalog is published.
+# manifest_check = false
 
 [keys]
 # Prefix key to enter prefix mode (default: "ctrl+b")
@@ -160,7 +159,7 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 # previous_agent = ""     # optional, unset by default
 # next_agent = ""         # optional, unset by default
 # focus_agent = ""        # optional indexed binding, e.g. "prefix+alt+1..9"
-# remote_image_paste = "ctrl+v" # only active in herdr --remote; empty disables raw-key image paste
+# remote_image_paste = "ctrl+v" # only active in herdl --remote; empty disables raw-key image paste
 # new_tab = "prefix+c"
 # rename_tab = "prefix+shift+t"
 # previous_tab = "prefix+p"
@@ -244,11 +243,11 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 # Collapsed sidebar presentation: "compact" keeps the narrow status rail, "hidden" uses zero width.
 # sidebar_collapsed_mode = "compact"
 
-# Terminal width at or below which Herdr uses the mobile single-column layout.
+# Terminal width at or below which HerDL uses the mobile single-column layout.
 # Increase this for foldables, tablets, or wide phone terminals.
 # mobile_width_threshold = 64
 
-# Capture mouse input for Herdr's mouse UI.
+# Capture mouse input for HerDL's mouse UI.
 # Set false to let the terminal handle normal clicks, such as Cmd-clicking URLs.
 # Pane apps like lazygit and btop can still receive mouse when they request it.
 # mouse_capture = true
@@ -259,16 +258,16 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 # copy_on_select = true
 
 # Host cursor policy: "auto", "native", or "drawn".
-# "auto" draws Herdr's own cursor on native Windows builds and WSL to avoid ConPTY cursor flicker, and uses the native terminal cursor elsewhere.
-# "native" always uses the outer terminal cursor. "drawn" always draws Herdr's cursor as terminal cell content.
+# "auto" draws HerDL's own cursor on native Windows builds and WSL to avoid ConPTY cursor flicker, and uses the native terminal cursor elsewhere.
+# "native" always uses the outer terminal cursor. "drawn" always draws HerDL's cursor as terminal cell content.
 # host_cursor = "auto"
 
-# Optional modifier that forwards right-click hold/drag gestures to pane apps instead of opening Herdr's pane menu.
+# Optional modifier that forwards right-click hold/drag gestures to pane apps instead of opening HerDL's pane menu.
 # Empty/off disables this. Shift is intentionally unsupported because terminals commonly reserve Shift+mouse.
 # right_click_passthrough_modifier = ""
 
 # Force a full redraw when the outer terminal regains focus.
-# Set false to reduce visible flashing when switching back to Herdr.
+# Set false to reduce visible flashing when switching back to HerDL.
 # Trade-off: rare host terminal surface corruption may persist until the next full redraw.
 # redraw_on_focus_gained = true
 
@@ -314,14 +313,14 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 
 # Ordered status entries at the right edge of the desktop tab bar.
 # Supported types: zoom, hostname, datetime, text, and command.
-# Hostname, datetime, and command entries resolve on the Herdr server.
+# Hostname, datetime, and command entries resolve on the HerDL server.
 # tab_bar_right = []
 # tab_bar_right_separator = " "
 
-# Title Herdr writes to the terminal it runs in, which is what window managers
+# Title HerDL writes to the terminal it runs in, which is what window managers
 # show in title, tab, and group bars. Tokens are {hostname}, {workspace}, {tab},
 # {pane}, and {terminal_title}; {{ and }} are literal braces.
-# The title renders on the Herdr server, so {hostname} names the host the panes
+# The title renders on the HerDL server, so {hostname} names the host the panes
 # run on even when attaching from a remote client.
 # Set to "" to leave the outer terminal title alone.
 # window_title = "{hostname}: {workspace}"
@@ -390,15 +389,15 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 
 [session]
 # Resume supported AI-agent panes into their native conversation sessions after
-# a Herdr server restart. Requires official integrations that report session refs.
+# a HerDL server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
 
 [remote]
-# Whether herdr manages the ssh config used for `herdr --remote`.
+# Whether HerDL manages the ssh config used for `herdl --remote`.
 # When true (default), herdr runs remote ssh through a generated config that
 # includes your ~/.ssh/config first and adds ServerAliveInterval/
 # ServerAliveCountMax as fallbacks (so any keepalive values you set yourself
-# still win) to survive idle network/NAT timeouts. Herdr also uses a private
+# still win) to survive idle network/NAT timeouts. HerDL also uses a private
 # per-attach OpenSSH control socket to reuse the first authenticated connection.
 # Set false to run plain ssh against your ssh config unchanged — this does not
 # force keepalive or multiplexing off, it only stops herdr from adding its own.
@@ -439,7 +438,7 @@ pane_history = false
 "##;
 
 // Bundled at build time so the printed skill always matches this binary's release.
-const SKILL: &str = include_str!("../skills/herdr/SKILL.md");
+const SKILL: &str = include_str!("../skills/herdl/SKILL.md");
 
 fn should_block_nested(config: &config::Config) -> bool {
     should_block_nested_for_env(config, std::env::var(product::ENV_VAR).ok().as_deref())
@@ -822,7 +821,7 @@ fn main() -> io::Result<()> {
     let saved_federation =
         client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());
     if let Err(err) = server::autodetect::auto_detect_launch(saved_federation) {
-        eprintln!("herdr: {err}");
+        eprintln!("herdl: {err}");
         std::process::exit(1);
     }
     Ok(())
@@ -861,7 +860,7 @@ mod tests {
     fn nested_message_strings_no_longer_repeat_herdr_prefix() {
         assert!(NESTED_HERDR_MESSAGES
             .iter()
-            .all(|message| !message.starts_with("herdr:")));
+            .all(|message| !message.starts_with("herdl:")));
     }
 
     #[cfg(unix)]

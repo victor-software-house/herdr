@@ -92,9 +92,9 @@ docs-contract-test:
 
 # Test bundled agent integration assets
 integration-assets-test:
-    bun test src/integration/assets/herdr-agent-state.test.ts
-    bun test src/integration/assets/opencode/herdr-agent-state.test.ts
-    bun test src/integration/assets/opencode/herdr-tui-session.test.ts
+    bun test src/integration/assets/herdl-agent-state.test.ts
+    bun test src/integration/assets/opencode/herdl-agent-state.test.ts
+    bun test src/integration/assets/opencode/herdl-tui-session.test.ts
 
 # Regenerate the C API bindings with bindgen-cli 0.72.1
 libghostty-bindings *clang_args:
@@ -148,8 +148,8 @@ pre-release-check:
     just bench-render-scale
     just bench-release-smoke
     @echo "release review required: investigate material render-scaling regressions before publishing."
-    @echo "release review required: update skills/herdr/SKILL.md for this stable release so it matches the current CLI, IDs, agent lifecycle semantics, and safety guidance."
-    @echo "release policy: do not update skills/herdr/SKILL.md between stable releases; preview builds keep the latest stable skill."
+    @echo "release review required: update skills/herdl/SKILL.md for this stable release so it matches the current CLI, IDs, agent lifecycle semantics, and safety guidance."
+    @echo "release policy: do not update skills/herdl/SKILL.md between stable releases; preview builds keep the latest stable skill."
 
 # Prepare the release commit without tagging or pushing (usage: just release-prepare 0.1.1)
 release-prepare version:
@@ -157,10 +157,10 @@ release-prepare version:
         echo "error: version must look like 0.6.6 without a v prefix"; \
         exit 1; \
     }
-    @if ! git diff --quiet -- . ':(exclude)skills/herdr/SKILL.md' || \
-        ! git diff --cached --quiet -- . ':(exclude)skills/herdr/SKILL.md' || \
+    @if ! git diff --quiet -- . ':(exclude)skills/herdl/SKILL.md' || \
+        ! git diff --cached --quiet -- . ':(exclude)skills/herdl/SKILL.md' || \
         [ -n "$(git ls-files --others --exclude-standard)" ]; then \
-        echo "error: commit all changes except skills/herdr/SKILL.md first"; \
+        echo "error: commit all changes except skills/herdl/SKILL.md first"; \
         exit 1; \
     fi
     @git fetch origin master --tags
@@ -172,9 +172,9 @@ release-prepare version:
     python3 scripts/changelog.py prepare --version {{version}}
     cp CHANGELOG.md docs/next/CHANGELOG.md
     sed -i.bak 's/^version = ".*"/version = "{{version}}"/' Cargo.toml && rm -f Cargo.toml.bak
-    cargo update -p herdr --offline
+    cargo update -p herdl --offline
     just check
-    git add CHANGELOG.md docs/next/CHANGELOG.md Cargo.toml Cargo.lock skills/herdr/SKILL.md
+    git add CHANGELOG.md docs/next/CHANGELOG.md Cargo.toml Cargo.lock skills/herdl/SKILL.md
     git diff --cached --quiet || git commit -m "release: v{{version}}"
     @echo "v{{version}} release commit prepared. Review it, then run: just release-publish {{version}}"
 

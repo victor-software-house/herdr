@@ -20,6 +20,9 @@ version: std.SemanticVersion,
 /// combined static archive for downstream consumers.
 simd_libs: SharedDeps.LazyPathList,
 
+/// Optional libc configuration for target artifacts only.
+target_libc: ?[]const u8,
+
 pub fn init(
     b: *std.Build,
     cfg: *const Config,
@@ -99,6 +102,8 @@ fn initInner(
         .version = cfg.lib_version,
 
         .simd_libs = simd_libs,
+
+        .target_libc = cfg.target_libc,
     };
 }
 
@@ -146,6 +151,7 @@ fn initVt(
         if (b.lazyDependency("wuffs", .{
             .target = cfg.target,
             .optimize = cfg.optimize,
+            .target_libc = cfg.target_libc,
         })) |dep| {
             vt.addImport("wuffs", dep.module("wuffs"));
         }

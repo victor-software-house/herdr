@@ -1686,7 +1686,7 @@ mod tests {
             .get_mut(&terminal_id)
             .unwrap()
             .set_hook_authority(
-                "herdr:omp".to_string(),
+                "herdl:omp".to_string(),
                 "omp".to_string(),
                 AgentState::Working,
                 None,
@@ -2100,7 +2100,7 @@ mod tests {
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
         terminal
             .set_hook_authority_at(
-                "herdr:codex".into(),
+                "herdl:codex".into(),
                 "codex".into(),
                 AgentState::Working,
                 None,
@@ -2244,7 +2244,7 @@ mod tests {
         terminal.respawn_shell_on_exit = true;
         terminal.set_agent_name("codex".into());
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:codex".into(),
+            source: "herdl:codex".into(),
             agent: "codex".into(),
             session_ref: crate::agent_resume::AgentSessionRef::id("codex-session")
                 .expect("test session id should be valid"),

@@ -1,0 +1,128 @@
+compact-tab-spacing
+
+From: Victor Araújo <victor@victor-software-house.com>
+
+Downstream-Reason: Render desktop tabs with one cell of label padding on each side and no extra blank inter-tab column.
+Upstream-Status: not-submitted
+Drop-When: Upstream desktop tabs use equivalent compact label padding without a separate empty separator column.
+---
+ src/client/shell/tabs.rs                       |   11 ++++----
+ src/client/shell/tests/keybindings_settings.rs |   34 +++++++++++++++++++++++-
+ 2 files changed, 37 insertions(+), 8 deletions(-)
+
+diff --git a/src/client/shell/tabs.rs b/src/client/shell/tabs.rs
+index cf179d80..464af331 100644
+--- a/src/client/shell/tabs.rs
++++ b/src/client/shell/tabs.rs
+@@ -25,7 +25,7 @@ pub(crate) fn render_tab_bar(
+         .iter()
+         .map(|tab| {
+             let label = tab_label(tab);
+-            display_width(&label).saturating_add(4).max(MIN_TAB_WIDTH)
++            display_width(&label).saturating_add(2).max(MIN_TAB_WIDTH)
+         })
+         .collect::<Vec<_>>();
+     let content = tab_bar_content_area(snapshot, area);
+@@ -35,7 +35,6 @@ pub(crate) fn render_tab_bar(
+         .iter()
+         .copied()
+         .fold(0_u16, u16::saturating_add)
+-        .saturating_add(tabs.len().saturating_sub(1).min(u16::MAX as usize) as u16)
+         .saturating_add(new_tab_width);
+     let overflow =
+         desired_total > content.width && (!mouse_chrome || content.width >= MIN_TAB_STRIP_WIDTH);
+@@ -129,7 +128,7 @@ pub(crate) fn render_tab_bar(
+         hits.tabs.push((rect, tab.tab_id.clone()));
+         first_visible.get_or_insert(index);
+         last_visible = Some(index);
+-        x = x.saturating_add(width + 1);
++        x = x.saturating_add(width);
+         if width < desired {
+             break;
+         }
+@@ -318,7 +317,7 @@ fn tab_drop_indicator_x(
+         });
+     }
+     if let Some((_, rect)) = visible.iter().find(|(index, _)| *index == insert_index) {
+-        return Some(rect.x.saturating_sub(1));
++        return Some(rect.x);
+     }
+     if insert_index >= tabs.len() {
+         return Some(if last_index + 1 >= tabs.len() {
+@@ -340,7 +339,7 @@ fn centered_tab_scroll(focused: usize, widths: &[u16], available: u16) -> usize
+             .enumerate()
+             .skip(start)
+             .take(focused.saturating_sub(start))
+-            .fold(0u16, |width, (_, tab)| width.saturating_add(tab + 1));
++            .fold(0u16, |width, (_, tab)| width.saturating_add(tab));
+         if before >= available {
+             continue;
+         }
+@@ -372,7 +371,7 @@ fn last_visible_tab(start: usize, widths: &[u16], available: u16) -> Option<usiz
+         if width >= remaining {
+             break;
+         }
+-        remaining = remaining.saturating_sub(width.saturating_add(1));
++        remaining = remaining.saturating_sub(width);
+     }
+     last
+ }
+diff --git a/src/client/shell/tests/keybindings_settings.rs b/src/client/shell/tests/keybindings_settings.rs
+index 1654d0df..2c952ad8 100644
+--- a/src/client/shell/tests/keybindings_settings.rs
++++ b/src/client/shell/tests/keybindings_settings.rs
+@@ -44,6 +44,36 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
+     ));
+ }
+ 
++#[test]
++fn tab_bar_uses_single_cell_label_padding_without_an_inter_tab_gap() {
++    let mut projected = snapshot();
++    projected.tabs[0].label = "artifact-track".into();
++    projected.tabs[0].custom_label = true;
++    let mut second = projected.tabs[0].clone();
++    second.tab_id = "tab_2".into();
++    second.number = 2;
++    second.label = "rendered-markdown".into();
++    second.focused = false;
++    projected.tabs.push(second);
++
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.set_snapshot(Box::new(projected));
++    state.set_pane_surface(surface());
++    let frame = state.compose(106, 20).expect("two custom tabs");
++
++    let first = state.hits.tabs[0].0;
++    let second = state.hits.tabs[1].0;
++    assert_eq!(first.width, 16);
++    assert_eq!(second.x, first.right());
++
++    let row_start = first.y as usize * frame.width as usize + first.x as usize;
++    let text = frame.cells[row_start..row_start + first.width as usize]
++        .iter()
++        .map(|cell| cell.symbol.as_str())
++        .collect::<String>();
++    assert_eq!(text, " artifact-track ");
++}
++
+ #[test]
+ fn manual_client_chrome_preferences_round_trip_per_endpoint() {
+     let path = std::env::temp_dir().join(format!(
+@@ -114,7 +144,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
+         },
+     ];
+     projected.tab_bar_right_separator = " · ".into();
+-    for number in 2..=8 {
++    for number in 2..=9 {
+         projected.tabs.push(ClientShellTab {
+             tab_id: format!("tab_{number}"),
+             workspace_id: "ws_1".into(),
+@@ -142,7 +172,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
+     state.tab_scroll = usize::MAX;
+     state.reveal_focused_tab = false;
+     state.compose(106, 20).expect("clamped tab scroll");
+-    assert!(state.tab_scroll < 7);
++    assert!(state.tab_scroll < 8);
+     let manual_scroll = state.tab_scroll;
+     let mut replacement = (**state.snapshot.as_ref().expect("snapshot")).clone();
+     replacement.revision = 2;

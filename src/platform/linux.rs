@@ -21,7 +21,7 @@ pub(crate) use super::unix_common::{
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
-const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";
+const PROCESS_DETECTION_ENV_VAR: &str = crate::product::PROCESS_DETECTION_ENV_VAR;
 const CHILD_GROUPS_SCAN_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -577,7 +577,10 @@ fn show_desktop_notification_with_command(
     }
 
     let mut cmd = command("notify-send");
-    cmd.arg("--app-name").arg("Herdr").arg("--").arg(title);
+    cmd.arg("--app-name")
+        .arg(crate::product::DISPLAY_NAME)
+        .arg("--")
+        .arg(title);
     if let Some(body) = body.filter(|body| !body.is_empty()) {
         cmd.arg(body);
     }

@@ -1077,7 +1077,7 @@ fn layout_export_apply_round_trip() {
             pane: LayoutPane {
                 label: Some("tests".into()),
                 command: Some(vec!["sh".into(), "-c".into(), "just test".into()]),
-                env: HashMap::from([("HERDR_ROLE".into(), "tests".into())]),
+                env: HashMap::from([("HERDL_ROLE".into(), "tests".into())]),
                 ..Default::default()
             },
         }),
@@ -1407,7 +1407,7 @@ fn plugin_pane_open_request_round_trips() {
             direction: None,
             cwd: Some("/tmp".into()),
             focus: true,
-            env: [("HERDR_ROLE".to_string(), "board".to_string())].into(),
+            env: [("HERDL_ROLE".to_string(), "board".to_string())].into(),
         }),
     };
 
@@ -1416,7 +1416,7 @@ fn plugin_pane_open_request_round_trips() {
     assert_eq!(json["params"]["placement"], "popup");
     assert_eq!(json["params"]["width"], 90);
     assert_eq!(json["params"]["height"], "80%");
-    assert_eq!(json["params"]["env"]["HERDR_ROLE"], "board");
+    assert_eq!(json["params"]["env"]["HERDL_ROLE"], "board");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, request);
 }

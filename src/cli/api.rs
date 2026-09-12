@@ -55,7 +55,7 @@ fn api_schema(args: &[String]) -> std::io::Result<i32> {
 
 fn api_snapshot(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: herdr api snapshot");
+        eprintln!("usage: herdl api snapshot");
         return Ok(2);
     }
 
@@ -103,7 +103,7 @@ fn print_api_help() {
 }
 
 fn print_api_schema_help() {
-    eprintln!("usage: herdr api schema [--json | --output PATH]");
+    eprintln!("usage: herdl api schema [--json | --output PATH]");
 }
 
 #[cfg(test)]

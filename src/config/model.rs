@@ -40,8 +40,8 @@ impl Default for UpdateConfig {
     fn default() -> Self {
         Self {
             channel: default_update_channel(),
-            version_check: true,
-            manifest_check: true,
+            version_check: false,
+            manifest_check: false,
         }
     }
 }
@@ -1020,7 +1020,7 @@ pub struct AdvancedConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct RemoteConfig {
-    /// Add keepalive fallbacks and private connection reuse for `herdr --remote`.
+    /// Add keepalive fallbacks and private connection reuse for `herdl --remote`.
     /// Set false to run plain ssh unchanged. Default: true.
     pub manage_ssh_config: bool,
 }
@@ -1296,8 +1296,8 @@ mod tests {
     fn update_config_defaults_and_parses() {
         let default_config = Config::default();
         assert_eq!(default_config.update.channel, default_update_channel());
-        assert!(default_config.update.version_check);
-        assert!(default_config.update.manifest_check);
+        assert!(!default_config.update.version_check);
+        assert!(!default_config.update.manifest_check);
 
         let toml = r#"
 [update]

@@ -1058,8 +1058,8 @@ mod tests {
     fn procargs2_env_reads_agent_hint_after_argv() {
         let buf = build_procargs2(
             "/opt/homebrew/bin/nono",
-            &["nono", "run", "HERDR_AGENT=codex", "--", "claude"],
-            &["PATH=/usr/bin", "HERDR_AGENT=claude", "TERM=xterm-256color"],
+            &["nono", "run", "HERDL_AGENT=codex", "--", "claude"],
+            &["PATH=/usr/bin", "HERDL_AGENT=claude", "TERM=xterm-256color"],
         );
 
         let env = procargs2_env(&buf).expect("expected env block");
@@ -1073,7 +1073,7 @@ mod tests {
     fn procargs2_env_does_not_treat_argv_as_environment() {
         let buf = build_procargs2(
             "/opt/homebrew/bin/nono",
-            &["nono", "run", "HERDR_AGENT=claude"],
+            &["nono", "run", "HERDL_AGENT=claude"],
             &["PATH=/usr/bin"],
         );
 

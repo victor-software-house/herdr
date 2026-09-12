@@ -51,7 +51,7 @@ fn list(args: &[String]) -> std::io::Result<i32> {
         [] => false,
         [flag] if flag == "--json" => true,
         _ => {
-            eprintln!("usage: herdr machine list [--json]");
+            eprintln!("usage: herdl machine list [--json]");
             return Ok(2);
         }
     };
@@ -133,7 +133,7 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
         }
     }
     let target = target.ok_or_else(|| {
-        "usage: herdr machine add <ssh-target> --label <label> [--remote-session <name>]".to_owned()
+        "usage: herdl machine add <ssh-target> --label <label> [--remote-session <name>]".to_owned()
     })?;
     let label = label.ok_or_else(|| "--label is required".to_owned())?;
     let session = session.unwrap_or_else(|| crate::session::DEFAULT_SESSION_NAME.to_owned());
@@ -195,11 +195,11 @@ fn add(args: &[String]) -> std::io::Result<i32> {
 fn rename(args: &[String]) -> std::io::Result<i32> {
     let args = super::expand_equals_args(args, &["--label"]);
     let [raw_id, flag, label] = args.as_slice() else {
-        eprintln!("usage: herdr machine rename <profile-id> --label <label>");
+        eprintln!("usage: herdl machine rename <profile-id> --label <label>");
         return Ok(2);
     };
     if flag != "--label" {
-        eprintln!("usage: herdr machine rename <profile-id> --label <label>");
+        eprintln!("usage: herdl machine rename <profile-id> --label <label>");
         return Ok(2);
     }
     let id = match ProfileId::parse(raw_id.clone()) {
@@ -227,7 +227,7 @@ fn rename(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn remove(args: &[String]) -> std::io::Result<i32> {
-    let Some(id) = one_profile_id(args, "usage: herdr machine remove <profile-id>")? else {
+    let Some(id) = one_profile_id(args, "usage: herdl machine remove <profile-id>")? else {
         return Ok(2);
     };
     let mut catalog = load_catalog()?;
@@ -246,7 +246,7 @@ fn remove(args: &[String]) -> std::io::Result<i32> {
 
 fn set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
     let action = if enabled { "enable" } else { "disable" };
-    let usage = format!("usage: herdr machine {action} <profile-id>");
+    let usage = format!("usage: herdl machine {action} <profile-id>");
     let Some(id) = one_profile_id(args, &usage)? else {
         return Ok(2);
     };

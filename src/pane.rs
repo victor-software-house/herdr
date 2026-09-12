@@ -148,9 +148,11 @@ impl PaneLaunchEnv {
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     cmd.env_remove("CODEX_THREAD_ID");
     for (key, value) in &launch_env.extra {
-        cmd.env(key, value);
+        if !crate::product::is_foreign_env_key(key.as_ref()) {
+            cmd.env(key, value);
+        }
     }
-    cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+    cmd.env(crate::product::ENV_VAR, crate::product::ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {

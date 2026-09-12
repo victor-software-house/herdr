@@ -1,0 +1,732 @@
+configurable-collapsed-sidebar
+
+From: Victor Araújo <victor@victor-software-house.com>
+
+Downstream-Reason: Make collapsed sidebar geometry and chrome fully configurable while preserving upstream defaults.
+Upstream-Status: not-submitted
+Drop-When: Upstream exposes equivalent validated collapsed-sidebar width, row columns, divider, and toggle configuration.
+---
+ .../website/src/content/docs/configuration.mdx     |   33 ++++
+ docs/next/website/src/data/config-reference.json   |   54 ++++++
+ src/app/mod.rs                                     |    2 
+ src/client/config_reload.rs                        |    3 
+ src/client/shell/config.rs                         |   29 +++
+ src/client/shell/sidebar.rs                        |   42 +++-
+ src/client/shell/state.rs                          |    1 
+ .../shell/tests/agents_worktrees_notifications.rs  |   60 +++++-
+ src/config.rs                                      |   11 +
+ src/config/sidebar.rs                              |  188 ++++++++++++++++++++
+ src/main.rs                                        |   15 ++
+ 11 files changed, 407 insertions(+), 31 deletions(-)
+
+diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
+index ec7e0f84..272e5500 100644
+--- a/docs/next/website/src/content/docs/configuration.mdx
++++ b/docs/next/website/src/content/docs/configuration.mdx
+@@ -376,6 +376,39 @@ status_indicators = "symbols"
+ 
+ The symbols are static, so this option does not enable spinner animation.
+ 
++### Collapsed sidebar
++
++The compact desktop sidebar keeps the upstream four-column rail by default. Its
++rightmost column remains reserved as the boundary before pane content, leaving
++three columns for each compact row:
++
++```toml
++[ui.sidebar.collapsed]
++width = 4
++divider = "─"
++toggle = "»"
++
++[ui.sidebar.collapsed.workspaces]
++number_offset = 0
++number_width = 2
++status_offset = 2
++
++[ui.sidebar.collapsed.agents]
++number_offset = 0
++number_width = 2
++status_offset = 2
++```
++
++`width` accepts 2–32 columns. Each row type independently places its numeric
++index and one-column status icon inside the usable `width - 1` columns.
++`number_width = 0` hides the number. Otherwise the number range and status
++column cannot overlap or cross the usable boundary. `divider` and `toggle` must
++each be printable text exactly one terminal column wide.
++
++Workspace and Agent hit targets still cover their complete configured row. The
++toggle hit remains centered in the usable rail. `sidebar_collapsed_mode =
++"hidden"` still uses zero width and ignores this compact geometry.
++
+ ### Sidebar row layouts
+ 
+ The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:
+diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
+index 444f6a17..7c1badab 100644
+--- a/docs/next/website/src/data/config-reference.json
++++ b/docs/next/website/src/data/config-reference.json
+@@ -887,6 +887,60 @@
+             "hidden"
+           ]
+         },
++        {
++          "key": "ui.sidebar.collapsed.width",
++          "type": "integer",
++          "default": "4",
++          "description": "Total compact sidebar width. Accepts 2–32; the rightmost column remains the pane boundary."
++        },
++        {
++          "key": "ui.sidebar.collapsed.divider",
++          "type": "string",
++          "default": "\"─\"",
++          "description": "Printable single-column glyph repeated across the compact workspace/agent divider."
++        },
++        {
++          "key": "ui.sidebar.collapsed.toggle",
++          "type": "string",
++          "default": "\"»\"",
++          "description": "Printable single-column glyph used for the compact sidebar toggle."
++        },
++        {
++          "key": "ui.sidebar.collapsed.workspaces.number_offset",
++          "type": "integer",
++          "default": "0",
++          "description": "Zero-based compact workspace number column offset."
++        },
++        {
++          "key": "ui.sidebar.collapsed.workspaces.number_width",
++          "type": "integer",
++          "default": "2",
++          "description": "Compact workspace number width. Zero hides the number."
++        },
++        {
++          "key": "ui.sidebar.collapsed.workspaces.status_offset",
++          "type": "integer",
++          "default": "2",
++          "description": "Zero-based compact workspace status-icon column offset."
++        },
++        {
++          "key": "ui.sidebar.collapsed.agents.number_offset",
++          "type": "integer",
++          "default": "0",
++          "description": "Zero-based compact agent number column offset."
++        },
++        {
++          "key": "ui.sidebar.collapsed.agents.number_width",
++          "type": "integer",
++          "default": "2",
++          "description": "Compact agent number width. Zero hides the number."
++        },
++        {
++          "key": "ui.sidebar.collapsed.agents.status_offset",
++          "type": "integer",
++          "default": "2",
++          "description": "Zero-based compact agent status-icon column offset."
++        },
+         {
+           "key": "ui.mobile_width_threshold",
+           "type": "integer",
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 89edf10d..2ee6dc26 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -820,7 +820,7 @@ impl App {
+             // On `min > max`, treat the entire `[ui]` section as invalid: keep
+             // the previous settings and skip the section so the re-clamp below
+             // — and every subsequent render/drag — can never panic.
+-            if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
++            if let Some(diagnostic) = config.invalid_sidebar_diagnostic() {
+                 diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
+             } else {
+                 diagnostics.extend(config.ui.sound.diagnostics());
+diff --git a/src/client/config_reload.rs b/src/client/config_reload.rs
+index 729a7e53..3c0dabba 100644
+--- a/src/client/config_reload.rs
++++ b/src/client/config_reload.rs
+@@ -107,8 +107,7 @@ pub(super) fn reload_local_client_config(
+                     .iter()
+                     .any(|invalid| invalid == section)
+             };
+-            if !invalid_section("ui") && loaded.config.invalid_sidebar_bounds_diagnostic().is_none()
+-            {
++            if !invalid_section("ui") && loaded.config.invalid_sidebar_diagnostic().is_none() {
+                 for diagnostic in loaded.config.ui.sound.diagnostics() {
+                     warn!(diagnostic = %diagnostic, "local sound config diagnostic");
+                 }
+diff --git a/src/client/shell/config.rs b/src/client/shell/config.rs
+index 8e07658d..9b63bf84 100644
+--- a/src/client/shell/config.rs
++++ b/src/client/shell/config.rs
+@@ -112,12 +112,18 @@ impl ClientShellState {
+ impl ClientShellConfig {
+     pub(crate) fn from_config(config: &Config) -> Self {
+         let theme_runtime = crate::app::client_theme_runtime_from_config(config);
++        let collapsed_sidebar = if config.ui.sidebar.collapsed.invalid_diagnostic().is_none() {
++            config.ui.sidebar.collapsed.clone()
++        } else {
++            crate::config::CollapsedSidebarConfig::default()
++        };
+         Self {
+             sidebar_width: config.ui.sidebar_width,
+             sidebar_min_width: config.ui.sidebar_min_width,
+             sidebar_max_width: config.ui.sidebar_max_width,
+             sidebar_start_collapsed: config.ui.sidebar_start_collapsed,
+             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
++            collapsed_sidebar,
+             mobile_width_threshold: config.ui.mobile_width_threshold,
+             tab_bar_position: config.ui.tab_bar_position,
+             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
+@@ -311,7 +317,7 @@ impl ClientShellConfig {
+         }
+ 
+         if !invalid_section("ui") {
+-            if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
++            if let Some(diagnostic) = config.invalid_sidebar_diagnostic() {
+                 diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
+             } else {
+                 let ui = &config.ui;
+@@ -320,6 +326,7 @@ impl ClientShellConfig {
+                 self.sidebar_min_width = ui.sidebar_min_width;
+                 self.sidebar_max_width = ui.sidebar_max_width;
+                 self.sidebar_collapsed_mode = ui.sidebar_collapsed_mode;
++                self.collapsed_sidebar = ui.sidebar.collapsed.clone();
+                 self.mobile_width_threshold = ui.mobile_width_threshold;
+                 self.tab_bar_position = ui.tab_bar_position;
+                 self.hide_tab_bar_when_single_tab = ui.hide_tab_bar_when_single_tab;
+@@ -377,7 +384,7 @@ impl ClientShellConfig {
+ 
+         let sidebar_width = if sidebar_collapsed {
+             match self.sidebar_collapsed_mode {
+-                SidebarCollapsedModeConfig::Compact => 5,
++                SidebarCollapsedModeConfig::Compact => self.collapsed_sidebar.width,
+                 SidebarCollapsedModeConfig::Hidden => 0,
+             }
+         } else {
+@@ -455,6 +462,7 @@ mod tests {
+         let mut shell = ClientShellConfig::from_config(&Config::default());
+         let mut next = Config::default();
+         next.ui.sidebar_width = 31;
++        next.ui.sidebar.collapsed.width = 6;
+         next.ui.tab_bar_position = TabBarPositionConfig::Bottom;
+         next.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
+@@ -465,6 +473,7 @@ mod tests {
+ 
+         assert!(diagnostics.is_empty());
+         assert_eq!(shell.sidebar_width, 31);
++        assert_eq!(shell.collapsed_sidebar.width, 6);
+         assert_eq!(shell.tab_bar_position, TabBarPositionConfig::Bottom);
+         assert_eq!(
+             shell.agent_panel_sort,
+@@ -495,6 +504,22 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn live_reload_preserves_ui_when_collapsed_geometry_is_invalid() {
++        let mut shell = ClientShellConfig::from_config(&Config::default());
++        let previous = shell.collapsed_sidebar.clone();
++        let mut invalid = Config::default();
++        invalid.ui.sidebar.collapsed.width = 2;
++
++        let diagnostics = shell.apply_live_config(&invalid, &[], &[]);
++
++        assert!(diagnostics.iter().any(|diagnostic| {
++            diagnostic.contains("collapsed.workspaces")
++                && diagnostic.contains("keeping previous [ui] settings")
++        }));
++        assert_eq!(shell.collapsed_sidebar, previous);
++    }
++
+     #[test]
+     fn initial_surface_size_uses_persisted_endpoint_chrome() {
+         let path = std::env::temp_dir().join(format!(
+diff --git a/src/client/shell/sidebar.rs b/src/client/shell/sidebar.rs
+index 494b63e9..a64ac4fb 100644
+--- a/src/client/shell/sidebar.rs
++++ b/src/client/shell/sidebar.rs
+@@ -68,20 +68,27 @@ pub(crate) fn render_collapsed_sidebar(
+         } else {
+             Style::default().fg(palette.overlay0)
+         };
++        let row = config.collapsed_sidebar.workspaces;
+         put_text(
+             buffer,
+-            rect.x.saturating_add(1),
++            rect.x.saturating_add(row.number_offset),
+             rect.y,
+-            rect.width.saturating_sub(1).min(2),
+-            &format!("{:<2}", index + 1),
++            rect.width
++                .saturating_sub(row.number_offset)
++                .min(row.number_width),
++            &format!(
++                "{:<width$}",
++                index + 1,
++                width = usize::from(row.number_width)
++            ),
+             number_style,
+         );
+         let status = workspace.agent_status;
+         put_text(
+             buffer,
+-            rect.x.saturating_add(3),
++            rect.x.saturating_add(row.status_offset),
+             rect.y,
+-            rect.width.saturating_sub(3),
++            rect.width.saturating_sub(row.status_offset),
+             status_icon(status, config.status_indicators),
+             Style::default().fg(status_color(status, palette)),
+         );
+@@ -100,7 +107,11 @@ pub(crate) fn render_collapsed_sidebar(
+             workspace_area.x,
+             divider_y,
+             workspace_area.width,
+-            &"─".repeat(workspace_area.width as usize),
++            &config
++                .collapsed_sidebar
++                .divider
++                .as_str()
++                .repeat(workspace_area.width as usize),
+             Style::default().fg(palette.surface_dim),
+         );
+     }
+@@ -132,12 +143,19 @@ pub(crate) fn render_collapsed_sidebar(
+         if agent.focused {
+             buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+         }
++        let row = config.collapsed_sidebar.agents;
+         put_text(
+             buffer,
+-            rect.x.saturating_add(1),
++            rect.x.saturating_add(row.number_offset),
+             rect.y,
+-            rect.width.saturating_sub(1).min(2),
+-            &format!("{:<2}", index + 1),
++            rect.width
++                .saturating_sub(row.number_offset)
++                .min(row.number_width),
++            &format!(
++                "{:<width$}",
++                index + 1,
++                width = usize::from(row.number_width)
++            ),
+             Style::default().fg(if agent.focused {
+                 palette.text
+             } else {
+@@ -146,9 +164,9 @@ pub(crate) fn render_collapsed_sidebar(
+         );
+         put_text(
+             buffer,
+-            rect.x.saturating_add(3),
++            rect.x.saturating_add(row.status_offset),
+             rect.y,
+-            rect.width.saturating_sub(3),
++            rect.width.saturating_sub(row.status_offset),
+             status_icon(agent.agent_status, config.status_indicators),
+             Style::default().fg(status_color(agent.agent_status, palette)),
+         );
+@@ -169,7 +187,7 @@ pub(crate) fn render_collapsed_sidebar(
+         hits.sidebar_toggle.x,
+         hits.sidebar_toggle.y,
+         hits.sidebar_toggle.width,
+-        "»",
++        config.collapsed_sidebar.toggle.as_str(),
+         if super::super::global_menu::global_menu_attention(snapshot) {
+             Style::default()
+                 .fg(palette.accent)
+diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
+index e2e406a2..5b988f1d 100644
+--- a/src/client/shell/state.rs
++++ b/src/client/shell/state.rs
+@@ -74,6 +74,7 @@ pub(crate) struct ClientShellConfig {
+     pub(super) sidebar_max_width: u16,
+     pub(super) sidebar_start_collapsed: bool,
+     pub(super) sidebar_collapsed_mode: SidebarCollapsedModeConfig,
++    pub(super) collapsed_sidebar: crate::config::CollapsedSidebarConfig,
+     pub(super) mobile_width_threshold: u16,
+     pub(super) tab_bar_position: TabBarPositionConfig,
+     pub(super) hide_tab_bar_when_single_tab: bool,
+diff --git a/src/client/shell/tests/agents_worktrees_notifications.rs b/src/client/shell/tests/agents_worktrees_notifications.rs
+index 1e26d4f3..4ffa92c9 100644
+--- a/src/client/shell/tests/agents_worktrees_notifications.rs
++++ b/src/client/shell/tests/agents_worktrees_notifications.rs
+@@ -50,7 +50,23 @@ fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
+ }
+ 
+ #[test]
+-fn collapsed_sidebar_insets_single_and_double_digit_workspace_numbers() {
++fn collapsed_sidebar_preserves_upstream_default_columns() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.sidebar_collapsed = true;
++    state.set_snapshot(Box::new(snapshot()));
++    state.set_pane_surface(surface());
++    let frame = state.compose(106, 20).expect("collapsed sidebar");
++    let buffer = frame.to_ratatui_buffer().expect("collapsed sidebar buffer");
++
++    let first = state.hits.workspaces[0].rect;
++    assert_eq!(first.width, 3);
++    assert_eq!(buffer[(first.x, first.y)].symbol(), "1");
++    assert_eq!(buffer[(first.x + 1, first.y)].symbol(), " ");
++    assert_ne!(buffer[(first.x + 2, first.y)].symbol(), " ");
++}
++
++#[test]
++fn collapsed_sidebar_applies_custom_row_columns_and_chrome() {
+     let mut projected = snapshot();
+     for number in 2..=10 {
+         let mut workspace = projected.workspaces[0].clone();
+@@ -61,7 +77,26 @@ fn collapsed_sidebar_insets_single_and_double_digit_workspace_numbers() {
+         projected.workspaces.push(workspace);
+     }
+ 
+-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    let config: Config = toml::from_str(
++        r#"
++[ui.sidebar.collapsed]
++width = 5
++divider = "="
++toggle = "<"
++
++[ui.sidebar.collapsed.workspaces]
++number_offset = 1
++number_width = 2
++status_offset = 3
++
++[ui.sidebar.collapsed.agents]
++number_offset = 1
++number_width = 2
++status_offset = 3
++"#,
++    )
++    .unwrap();
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+     state.sidebar_collapsed = true;
+     state.set_snapshot(Box::new(projected));
+     state.set_pane_surface(surface());
+@@ -69,14 +104,24 @@ fn collapsed_sidebar_insets_single_and_double_digit_workspace_numbers() {
+     let buffer = frame.to_ratatui_buffer().expect("collapsed sidebar buffer");
+ 
+     let first = state.hits.workspaces[0].rect;
++    assert_eq!(first.width, 4);
+     assert_eq!(buffer[(first.x, first.y)].symbol(), " ");
+     assert_eq!(buffer[(first.x + 1, first.y)].symbol(), "1");
+     assert_eq!(buffer[(first.x + 2, first.y)].symbol(), " ");
++    assert_ne!(buffer[(first.x + 3, first.y)].symbol(), " ");
+ 
+     let tenth = state.hits.workspaces[9].rect;
+     assert_eq!(buffer[(tenth.x, tenth.y)].symbol(), " ");
+     assert_eq!(buffer[(tenth.x + 1, tenth.y)].symbol(), "1");
+     assert_eq!(buffer[(tenth.x + 2, tenth.y)].symbol(), "0");
++
++    let (_, divider_y, _) =
++        crate::client::shell::sidebar::collapsed_sidebar_sections(Rect::new(0, 0, 5, 30));
++    assert_eq!(buffer[(0, divider_y.unwrap())].symbol(), "=");
++    assert_eq!(
++        buffer[(state.hits.sidebar_toggle.x, state.hits.sidebar_toggle.y)].symbol(),
++        "<"
++    );
+ }
+ 
+ #[test]
+@@ -597,15 +642,8 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
+         .expect("blocked compact agent")
+         .0;
+     let row_start = blocked.y as usize * compact.width as usize + blocked.x as usize;
+-    assert_eq!(compact.cells[row_start].symbol, " ");
+-    assert_ne!(
+-        compact.cells[row_start + 1].fg,
+-        compact.cells[row_start + 3].fg
+-    );
+-    assert_eq!(
+-        compact.cells[row_start + 1].bg,
+-        compact.cells[row_start + 3].bg
+-    );
++    assert_ne!(compact.cells[row_start].fg, compact.cells[row_start + 2].fg);
++    assert_eq!(compact.cells[row_start].bg, compact.cells[row_start + 2].bg);
+ }
+ 
+ #[test]
+diff --git a/src/config.rs b/src/config.rs
+index 48013569..6a0a5a8d 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -30,8 +30,8 @@ pub use self::{
+         UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
+     },
+     sidebar::{
+-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
+-        SpaceSidebarToken, SpacesSidebarConfig,
++        AgentSidebarToken, AgentsSidebarConfig, CollapsedSidebarConfig, SidebarConfig,
++        SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig,
+     },
+     sound::SoundConfig,
+     tab_bar::TabBarRightEntryConfig,
+@@ -123,7 +123,7 @@ impl Config {
+             .chain(self.ui.sound.diagnostics())
+             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
+             .chain(window_title_diagnostics(&self.ui.window_title))
+-            .chain(self.invalid_sidebar_bounds_diagnostic())
++            .chain(self.invalid_sidebar_diagnostic())
+             .chain(self.invalid_headless_size_diagnostic())
+             .collect()
+     }
+@@ -145,6 +145,11 @@ impl Config {
+         })
+     }
+ 
++    pub(crate) fn invalid_sidebar_diagnostic(&self) -> Option<String> {
++        self.invalid_sidebar_bounds_diagnostic()
++            .or_else(|| self.ui.sidebar.collapsed.invalid_diagnostic())
++    }
++
+     pub(crate) fn invalid_sidebar_bounds_diagnostic(&self) -> Option<String> {
+         validated_sidebar_bounds(self.ui.sidebar_min_width, self.ui.sidebar_max_width)
+             .is_none()
+diff --git a/src/config/sidebar.rs b/src/config/sidebar.rs
+index 9a4cb5e0..5f08b847 100644
+--- a/src/config/sidebar.rs
++++ b/src/config/sidebar.rs
+@@ -5,6 +5,7 @@ pub use rules::SidebarTokenRule;
+ use std::collections::BTreeMap;
+ 
+ use serde::{Deserialize, Serialize};
++use unicode_width::UnicodeWidthStr;
+ 
+ use crate::detect::Agent;
+ 
+@@ -401,6 +402,106 @@ impl<'de> Deserialize<'de> for SpaceSidebarToken {
+ type AgentSidebarRows = Vec<Vec<AgentSidebarToken>>;
+ type SpaceSidebarRows = Vec<Vec<SpaceSidebarToken>>;
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
++#[serde(transparent)]
++pub struct CollapsedSidebarGlyph(String);
++
++impl CollapsedSidebarGlyph {
++    pub(crate) fn as_str(&self) -> &str {
++        &self.0
++    }
++}
++
++impl<'de> Deserialize<'de> for CollapsedSidebarGlyph {
++    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
++    where
++        D: serde::Deserializer<'de>,
++    {
++        let value = String::deserialize(deserializer)?;
++        if value.chars().any(char::is_control) || UnicodeWidthStr::width(value.as_str()) != 1 {
++            return Err(serde::de::Error::custom(
++                "collapsed sidebar glyph must be printable text exactly one column wide",
++            ));
++        }
++        Ok(Self(value))
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
++#[serde(default, deny_unknown_fields)]
++pub struct CollapsedSidebarRowConfig {
++    pub number_offset: u16,
++    pub number_width: u16,
++    pub status_offset: u16,
++}
++
++impl Default for CollapsedSidebarRowConfig {
++    fn default() -> Self {
++        Self {
++            number_offset: 0,
++            number_width: 2,
++            status_offset: 2,
++        }
++    }
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
++#[serde(default, deny_unknown_fields)]
++pub struct CollapsedSidebarConfig {
++    pub width: u16,
++    pub divider: CollapsedSidebarGlyph,
++    pub toggle: CollapsedSidebarGlyph,
++    pub workspaces: CollapsedSidebarRowConfig,
++    pub agents: CollapsedSidebarRowConfig,
++}
++
++impl Default for CollapsedSidebarConfig {
++    fn default() -> Self {
++        Self {
++            width: 4,
++            divider: CollapsedSidebarGlyph("─".into()),
++            toggle: CollapsedSidebarGlyph("»".into()),
++            workspaces: CollapsedSidebarRowConfig::default(),
++            agents: CollapsedSidebarRowConfig::default(),
++        }
++    }
++}
++
++impl CollapsedSidebarConfig {
++    pub(crate) fn invalid_diagnostic(&self) -> Option<String> {
++        if !(2..=32).contains(&self.width) {
++            return Some(format!(
++                "ui.sidebar.collapsed.width must be between 2 and 32 (got {})",
++                self.width
++            ));
++        }
++        let usable_width = self.width - 1;
++        for (label, row) in [("workspaces", self.workspaces), ("agents", self.agents)] {
++            let Some(number_end) = row.number_offset.checked_add(row.number_width) else {
++                return Some(format!(
++                    "ui.sidebar.collapsed.{label} number columns exceed usable width {usable_width}"
++                ));
++            };
++            if number_end > usable_width {
++                return Some(format!(
++                    "ui.sidebar.collapsed.{label} number columns exceed usable width {usable_width}"
++                ));
++            }
++            if row.status_offset >= usable_width {
++                return Some(format!(
++                    "ui.sidebar.collapsed.{label}.status_offset must be below usable width {usable_width}"
++                ));
++            }
++            if row.number_width > 0 && row.status_offset < number_end {
++                return Some(format!(
++                    "ui.sidebar.collapsed.{label} number and status columns overlap"
++                ));
++            }
++        }
++        None
++    }
++}
++
+ fn deserialize_rows_by_agent<'de, D>(
+     deserializer: D,
+ ) -> Result<BTreeMap<String, AgentSidebarRows>, D::Error>
+@@ -480,12 +581,99 @@ impl Default for SpacesSidebarConfig {
+ pub struct SidebarConfig {
+     pub agents: AgentsSidebarConfig,
+     pub spaces: SpacesSidebarConfig,
++    pub collapsed: CollapsedSidebarConfig,
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn collapsed_sidebar_defaults_match_upstream_compact_geometry() {
++        let collapsed = CollapsedSidebarConfig::default();
++        assert_eq!(collapsed.width, 4);
++        assert_eq!(collapsed.workspaces, CollapsedSidebarRowConfig::default());
++        assert_eq!(collapsed.agents, CollapsedSidebarRowConfig::default());
++        assert_eq!(collapsed.divider.as_str(), "─");
++        assert_eq!(collapsed.toggle.as_str(), "»");
++        assert!(collapsed.invalid_diagnostic().is_none());
++    }
++
++    #[test]
++    fn collapsed_sidebar_parses_valid_custom_geometry_and_chrome() {
++        let config: SidebarConfig = toml::from_str(
++            r#"
++[collapsed]
++width = 5
++divider = "="
++toggle = "<"
++
++[collapsed.workspaces]
++number_offset = 1
++number_width = 2
++status_offset = 3
++
++[collapsed.agents]
++number_offset = 0
++number_width = 1
++status_offset = 2
++"#,
++        )
++        .unwrap();
++        assert_eq!(config.collapsed.width, 5);
++        assert_eq!(config.collapsed.workspaces.number_offset, 1);
++        assert_eq!(config.collapsed.agents.number_width, 1);
++        assert_eq!(config.collapsed.divider.as_str(), "=");
++        assert_eq!(config.collapsed.toggle.as_str(), "<");
++        assert!(config.collapsed.invalid_diagnostic().is_none());
++    }
++
++    #[test]
++    fn collapsed_sidebar_rejects_out_of_bounds_and_overlapping_columns() {
++        let collapsed = CollapsedSidebarConfig {
++            width: 1,
++            ..CollapsedSidebarConfig::default()
++        };
++        assert!(collapsed
++            .invalid_diagnostic()
++            .unwrap()
++            .contains("between 2 and 32"));
++
++        let collapsed = CollapsedSidebarConfig {
++            workspaces: CollapsedSidebarRowConfig {
++                status_offset: 1,
++                ..CollapsedSidebarRowConfig::default()
++            },
++            ..CollapsedSidebarConfig::default()
++        };
++        assert!(collapsed.invalid_diagnostic().unwrap().contains("overlap"));
++
++        let collapsed = CollapsedSidebarConfig {
++            agents: CollapsedSidebarRowConfig {
++                number_offset: u16::MAX,
++                ..CollapsedSidebarRowConfig::default()
++            },
++            ..CollapsedSidebarConfig::default()
++        };
++        assert!(collapsed
++            .invalid_diagnostic()
++            .unwrap()
++            .contains("exceed usable width"));
++    }
++
++    #[test]
++    fn collapsed_sidebar_glyphs_must_be_one_printable_column() {
++        for value in ["", "ab", "界", "\n"] {
++            let input = format!("[collapsed]\ndivider = {value:?}\n");
++            assert!(
++                toml::from_str::<SidebarConfig>(&input).is_err(),
++                "{value:?}"
++            );
++        }
++        let valid: SidebarConfig = toml::from_str("[collapsed]\ndivider = \"·\"\n").unwrap();
++        assert_eq!(valid.collapsed.divider.as_str(), "·");
++    }
++
+     #[test]
+     fn defaults_match_the_compact_agent_and_existing_space_layouts() {
+         let config = SidebarConfig::default();
+diff --git a/src/main.rs b/src/main.rs
+index 352172cc..f5be1919 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -242,6 +242,21 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
+ 
+ # Collapsed sidebar presentation: "compact" keeps the narrow status rail, "hidden" uses zero width.
+ # sidebar_collapsed_mode = "compact"
++#
++# [ui.sidebar.collapsed]
++# width = 4
++# divider = "─"
++# toggle = "»"
++#
++# [ui.sidebar.collapsed.workspaces]
++# number_offset = 0
++# number_width = 2
++# status_offset = 2
++#
++# [ui.sidebar.collapsed.agents]
++# number_offset = 0
++# number_width = 2
++# status_offset = 2
+ 
+ # Terminal width at or below which HerDL uses the mobile single-column layout.
+ # Increase this for foldables, tablets, or wide phone terminals.

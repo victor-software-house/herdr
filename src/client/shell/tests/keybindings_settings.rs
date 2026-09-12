@@ -45,6 +45,36 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
 }
 
 #[test]
+fn tab_bar_uses_single_cell_label_padding_without_an_inter_tab_gap() {
+    let mut projected = snapshot();
+    projected.tabs[0].label = "artifact-track".into();
+    projected.tabs[0].custom_label = true;
+    let mut second = projected.tabs[0].clone();
+    second.tab_id = "tab_2".into();
+    second.number = 2;
+    second.label = "rendered-markdown".into();
+    second.focused = false;
+    projected.tabs.push(second);
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 20).expect("two custom tabs");
+
+    let first = state.hits.tabs[0].0;
+    let second = state.hits.tabs[1].0;
+    assert_eq!(first.width, 16);
+    assert_eq!(second.x, first.right());
+
+    let row_start = first.y as usize * frame.width as usize + first.x as usize;
+    let text = frame.cells[row_start..row_start + first.width as usize]
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert_eq!(text, " artifact-track ");
+}
+
+#[test]
 fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     let path = std::env::temp_dir().join(format!(
         "herdr-client-shell-prefs-{}.json",
@@ -114,7 +144,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
         },
     ];
     projected.tab_bar_right_separator = " · ".into();
-    for number in 2..=8 {
+    for number in 2..=9 {
         projected.tabs.push(ClientShellTab {
             tab_id: format!("tab_{number}"),
             workspace_id: "ws_1".into(),
@@ -142,7 +172,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
     state.tab_scroll = usize::MAX;
     state.reveal_focused_tab = false;
     state.compose(106, 20).expect("clamped tab scroll");
-    assert!(state.tab_scroll < 7);
+    assert!(state.tab_scroll < 8);
     let manual_scroll = state.tab_scroll;
     let mut replacement = (**state.snapshot.as_ref().expect("snapshot")).clone();
     replacement.revision = 2;

@@ -25,7 +25,7 @@ pub(crate) fn render_tab_bar(
         .iter()
         .map(|tab| {
             let label = tab_label(tab);
-            display_width(&label).saturating_add(4).max(MIN_TAB_WIDTH)
+            display_width(&label).saturating_add(2).max(MIN_TAB_WIDTH)
         })
         .collect::<Vec<_>>();
     let content = tab_bar_content_area(snapshot, area);
@@ -35,7 +35,6 @@ pub(crate) fn render_tab_bar(
         .iter()
         .copied()
         .fold(0_u16, u16::saturating_add)
-        .saturating_add(tabs.len().saturating_sub(1).min(u16::MAX as usize) as u16)
         .saturating_add(new_tab_width);
     let overflow =
         desired_total > content.width && (!mouse_chrome || content.width >= MIN_TAB_STRIP_WIDTH);
@@ -129,7 +128,7 @@ pub(crate) fn render_tab_bar(
         hits.tabs.push((rect, tab.tab_id.clone()));
         first_visible.get_or_insert(index);
         last_visible = Some(index);
-        x = x.saturating_add(width + 1);
+        x = x.saturating_add(width);
         if width < desired {
             break;
         }
@@ -318,7 +317,7 @@ fn tab_drop_indicator_x(
         });
     }
     if let Some((_, rect)) = visible.iter().find(|(index, _)| *index == insert_index) {
-        return Some(rect.x.saturating_sub(1));
+        return Some(rect.x);
     }
     if insert_index >= tabs.len() {
         return Some(if last_index + 1 >= tabs.len() {
@@ -340,7 +339,7 @@ fn centered_tab_scroll(focused: usize, widths: &[u16], available: u16) -> usize 
             .enumerate()
             .skip(start)
             .take(focused.saturating_sub(start))
-            .fold(0u16, |width, (_, tab)| width.saturating_add(tab + 1));
+            .fold(0u16, |width, (_, tab)| width.saturating_add(tab));
         if before >= available {
             continue;
         }
@@ -372,7 +371,7 @@ fn last_visible_tab(start: usize, widths: &[u16], available: u16) -> Option<usiz
         if width >= remaining {
             break;
         }
-        remaining = remaining.saturating_sub(width.saturating_add(1));
+        remaining = remaining.saturating_sub(width);
     }
     last
 }

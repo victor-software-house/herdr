@@ -1,0 +1,42 @@
+fix-session-stop-product-identity
+
+From: Victor Araújo <victor@victor-software-house.com>
+
+Downstream-Reason: Tag direct session-stop API requests with the HerDL product identity.
+Upstream-Status: inappropriate
+Drop-When: The HerDL downstream product is retired.
+---
+ src/session.rs |    6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/session.rs b/src/session.rs
+index 6a0c621c..e5f73f80 100644
+--- a/src/session.rs
++++ b/src/session.rs
+@@ -275,6 +275,7 @@ fn stop_socket_with_timeout(
+ ) -> Result<(), String> {
+     let deadline = Instant::now() + timeout;
+     let request = serde_json::json!({
++        "product": crate::product::ID,
+         "id": "cli:session:stop",
+         "method": "server.stop",
+         "params": {}
+@@ -561,6 +562,7 @@ mod tests {
+             request
+         });
+         let request = serde_json::json!({
++            "product": crate::product::ID,
+             "id": "cli:session:stop",
+             "method": "server.stop",
+             "params": {}
+@@ -575,7 +577,9 @@ mod tests {
+             .unwrap(),
+             None
+         );
+-        assert!(handle.join().unwrap().contains("server.stop"));
++        let request = handle.join().unwrap();
++        assert!(request.contains("server.stop"));
++        assert!(request.contains("\"product\":\"herdl\""));
+     }
+ 
+     #[cfg(unix)]

@@ -1,0 +1,331 @@
+%YAML 1.2
+---
+schema: 1
+downstream:
+  remote: origin
+  branch: master
+  recovery_tag_prefix: forkctl/recovery
+  publish: append
+upstream:
+  remote: upstream
+  url: https://github.com/herdrdev/herdr.git
+  fetch_ref: refs/heads/master
+base:
+  target:
+    kind: commit
+    selector: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+    commit: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+  canonical: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+  stack: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+documents:
+  ledger: patches/LEDGER.md
+  exports: patches/exports
+bookkeeping_patch: fork-bookkeeping
+patches:
+  - name: herdl-product-namespace
+    kind: source
+    purpose: >-
+      Give HerDL independent product identity, mutable-state roots, runtime paths,
+      routing environment, and operator command text.
+    upstream_status: "inappropriate: downstream HerDL product namespace"
+    drop_when: The HerDL downstream product is retired.
+    scope:
+      - src/product.rs
+      - src/main.rs
+      - src/config.rs
+      - src/config/**
+      - src/session.rs
+      - src/api/mod.rs
+      - src/server/socket_paths.rs
+      - src/server/autodetect.rs
+      - src/server/handoff.rs
+      - src/pane.rs
+      - src/integration/env.rs
+      - src/app/custom_commands.rs
+      - src/app/tab_bar_status.rs
+      - src/app/api/plugins/**
+      - src/cli/plugin.rs
+      - src/cli/spec.rs
+      - src/cli/server.rs
+      - src/cli/server_not_running.rs
+      - src/logging.rs
+      - src/plugin_paths.rs
+      - src/persist/**
+      - src/client/endpoint/catalog.rs
+      - src/client/shell/preferences.rs
+      - src/detect/manifest.rs
+      - src/detect/manifest_update.rs
+      - src/pane_graphics_files.rs
+      - tests/**
+      - src/noninteractive_process.rs
+      - src/client/config_reload.rs
+      - src/server/headless/bootstrap.rs
+      - src/cli/completion.rs
+      - src/cli/target.rs
+      - src/cli/pane.rs
+      - src/client/errors.rs
+      - src/api/client.rs
+      - src/client/tests/**
+      - src/platform/**
+      - src/cli.rs
+      - Cargo.toml
+      - Cargo.lock
+      - build.rs
+      - mise.toml
+      - src/build_info.rs
+      - src/product_announcements.rs
+      - src/render_prof.rs
+      - src/sound.rs
+      - src/pane/osc.rs
+      - src/client/terminal_setup.rs
+      - src/client/input/windows_vti.rs
+      - src/remote/**
+      - src/app/api/layouts.rs
+      - src/api/schema/tests.rs
+      - justfile
+      - src/ui/onboarding.rs
+      - src/terminal_effects.rs
+      - src/api/server.rs
+      - src/app/mod.rs
+      - src/cli/**
+      - src/persist.rs
+      - src/server/headless.rs
+  - name: herdl-connection-identity
+    kind: source
+    purpose: >-
+      Make HerDL client, daemon, endpoint, API, handoff, and remote bridge
+      connections fail closed against official Herdr.
+    upstream_status: "inappropriate: downstream HerDL connection identity"
+    drop_when: The HerDL downstream product is retired.
+    scope:
+      - src/protocol/wire.rs
+      - src/protocol/endpoint.rs
+      - src/server/client_transport.rs
+      - src/client/handshake.rs
+      - src/server/autodetect.rs
+      - src/server/handoff.rs
+      - src/remote.rs
+      - src/remote/**
+      - src/api/server.rs
+      - src/api/schema/**
+      - tests/**
+      - src/api/client.rs
+      - src/api/server/**
+  - name: herdl-integration-update-isolation
+    kind: source
+    purpose: >-
+      Give HerDL independently named integration assets and disable official Herdr
+      update or remote-download fallback until a VSH release channel exists.
+    upstream_status: "inappropriate: downstream HerDL delivery isolation"
+    drop_when: The HerDL downstream product is retired.
+    scope:
+      - src/update.rs
+      - src/integration.rs
+      - src/integration/**
+      - src/remote.rs
+      - src/remote/**
+      - src/main.rs
+      - Cargo.toml
+      - build.rs
+      - justfile
+      - scripts/**
+      - distribution/**
+      - skills/**
+      - tests/**
+      - docs/next/api/**
+      - src/api/schema/tests.rs
+      - src/app/actions.rs
+      - src/server/headless/tests/**
+      - src/server/headless/notifications.rs
+      - src/ui/release_notes.rs
+      - src/agent_resume.rs
+      - src/app/agent_resume.rs
+      - src/app/api.rs
+      - src/app/api/panes.rs
+      - src/app/mod.rs
+      - src/detect/mod.rs
+      - src/detect/manifests/kilo.toml
+      - src/detect/manifests/opencode.toml
+      - src/detect/manifests/pi.toml
+      - src/client/mod.rs
+      - src/client/terminal_sessions.rs
+      - src/persist/restore.rs
+      - src/persist/snapshot.rs
+      - src/terminal/metadata.rs
+      - src/terminal/state.rs
+      - vendor/libghostty-vt.patches.md
+      - vendor/libghostty-vt/pkg/wuffs/build.zig
+      - vendor/libghostty-vt/src/build/Config.zig
+      - vendor/libghostty-vt/src/build/GhosttyLibVt.zig
+      - vendor/libghostty-vt/src/build/GhosttyZig.zig
+      - vendor/patches/libghostty-vt/0004-fix-hosted-wuffs-builds.patch
+  - name: native-config-inheritance
+    kind: source
+    purpose: Allow machine-local config files to inherit one explicit parent chain.
+    upstream_status: not-submitted
+    drop_when: >-
+      Upstream provides equivalent recursive config inheritance with source-aware
+      diagnostics and child-only writes.
+    scope:
+      - src/config/**
+      - docs/next/website/src/content/docs/configuration.mdx
+      - docs/next/website/src/data/config-reference.json
+      - src/app/mod.rs
+      - src/cli.rs
+      - src/config.rs
+  - name: configurable-collapsed-sidebar
+    kind: source
+    purpose: >-
+      Make collapsed sidebar geometry and chrome fully configurable while preserving
+      upstream defaults.
+    upstream_status: not-submitted
+    drop_when: >-
+      Upstream exposes equivalent validated collapsed-sidebar width, row columns,
+      divider, and toggle configuration.
+    scope:
+      - src/config.rs
+      - src/config/**
+      - src/client/shell/**
+      - src/app/mod.rs
+      - src/main.rs
+      - docs/next/website/src/content/docs/configuration.mdx
+      - docs/next/website/src/data/config-reference.json
+      - src/client/config_reload.rs
+  - name: configurable-tab-strip
+    kind: source
+    purpose: >-
+      Make desktop tab strip sizing, spacing, controls, and status reservation fully
+      configurable.
+    upstream_status: not-submitted
+    drop_when: >-
+      Upstream exposes equivalent validated tab-strip geometry and chrome
+      configuration.
+    scope:
+      - src/config.rs
+      - src/config/**
+      - src/client/shell/**
+      - src/app/mod.rs
+      - src/client/config_reload.rs
+      - src/main.rs
+      - docs/next/website/src/content/docs/configuration.mdx
+      - docs/next/website/src/data/config-reference.json
+  - name: pane-owned-terminal-tabs
+    kind: source
+    purpose: >-
+      Replace workspace-owned layout tabs with stable panes that each own live
+      terminal tab stacks.
+    upstream_status: not-submitted
+    drop_when: >-
+      Upstream Herdr adopts pane-owned terminal tab stacks with equivalent identity,
+      API, persistence, and client behavior.
+    scope:
+      - src/**
+      - tests/**
+      - docs/next/**
+      - scripts/test_hermes_integration_asset.py
+  - name: isolated-vsh-update-channel
+    kind: source
+    purpose: >-
+      Publish checksum-pinned VSH HerDL builds and enable only the isolated
+      downstream update channel.
+    upstream_status: inappropriate
+    drop_when: The HerDL downstream product is retired.
+    scope:
+      - src/build_info.rs
+      - src/update.rs
+      - src/remote/attach.rs
+      - src/config/model.rs
+      - src/main.rs
+      - scripts/herdl_release.py
+      - scripts/test_herdl_release.py
+      - .github/workflows/herdl-release.yml
+      - docs/next/website/src/content/docs/**
+      - justfile
+  - name: fix-vsh-arm64-artifact-verification
+    kind: source
+    purpose: >-
+      Accept embedded VSH provenance literals in cross-built Linux arm64 binaries
+      without requiring standalone strings records.
+    upstream_status: inappropriate
+    drop_when: The HerDL downstream product is retired.
+    scope:
+      - .github/workflows/herdl-release.yml
+  - name: fix-session-stop-product-identity
+    kind: source
+    purpose: Tag direct session-stop API requests with the HerDL product identity.
+    upstream_status: inappropriate
+    drop_when: The HerDL downstream product is retired.
+    scope:
+      - src/session.rs
+  - name: task-ledger
+    kind: tooling
+    purpose: >-
+      Track the downstream Herdr patch plan and validation order in a qctl-owned
+      repository queue.
+    upstream_status: "inappropriate: downstream-only fork maintenance"
+    drop_when: The downstream fork is retired.
+    scope:
+      - tasks.yaml
+  - name: fork-bookkeeping
+    kind: tooling
+    purpose: Own fork policy, generated evidence, and integration configuration.
+    upstream_status: "inappropriate: downstream-only fork maintenance"
+    drop_when: The downstream fork is retired.
+    scope:
+      - patches/fork.yaml
+      - patches/LEDGER.md
+      - patches/exports/**
+      - patches/**
+      - mise.toml
+disabled_patches: []
+history:
+  - kind: patch_removed
+    record:
+      patch:
+        name: compact-sidebar-number-inset
+        kind: source
+        purpose: >-
+          Inset compact sidebar workspace and agent numbers by one cell so they do not
+          touch the terminal edge.
+        upstream_status: not-submitted
+        drop_when: >-
+          Upstream compact sidebar numbers include an equivalent leading inset and
+          aligned status column.
+        scope:
+          - src/client/shell/config.rs
+          - src/client/shell/sidebar.rs
+          - src/client/shell/tests/agents_worktrees_notifications.rs
+      commit: 53bf932e5a7d2c0f492c620cacad55ef52932aa1
+      position: 0
+      reason: Superseded by validated collapsed-sidebar configuration with upstream defaults.
+      recovery:
+        tag: forkctl/recovery/1789262302754341000-6b82c79cff13
+        tag_object: 06fcb135a8f6f31fd28ebe7b162b6b46c04a54b0
+        old_base: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+        old_tip: 6b82c79cff1320071cfb5999d42793fd2243d8f6
+  - kind: patch_removed
+    record:
+      patch:
+        name: compact-tab-spacing
+        kind: source
+        purpose: >-
+          Render desktop tabs with one cell of label padding on each side and no extra
+          blank inter-tab column.
+        upstream_status: not-submitted
+        drop_when: >-
+          Upstream desktop tabs use equivalent compact label padding without a separate
+          empty separator column.
+        scope:
+          - src/client/shell/tabs.rs
+          - src/client/shell/tests/keybindings_settings.rs
+      commit: 3a705810abbb4b3b8667300b90bf1d66802a8e02
+      position: 0
+      reason: Superseded by validated configurable tab-strip layout with upstream defaults.
+      recovery:
+        tag: forkctl/recovery/1789263511037458000-6e6a9c8f2439
+        tag_object: 1fd67aec80312426c0b1830a8f3fd76f6d092100
+        old_base: 9ad65d9031e8cb16a7b553c0e6f74809e9811e92
+        old_tip: 6e6a9c8f2439f433da8ba8793b81f7dc9ddbefb3
+contracts:
+  allow_base: []
+  required_text: []

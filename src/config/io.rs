@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 
 use tracing::warn;
 
+use super::inheritance::{load_config_tree, ConfigKeyPathSegment, ConfigOrigins, ConfigTree};
+#[cfg(test)]
+use super::inheritance::{merge_config_values, MAX_CONFIG_EXTENDS_DEPTH};
 use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR};
 
 const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
@@ -126,8 +129,8 @@ pub(super) fn read_optional_config(path: &Path) -> std::io::Result<Option<String
 impl Config {
     pub fn load() -> LoadedConfig {
         let path = config_path();
-        let content = match read_optional_config(&path) {
-            Ok(Some(content)) => content,
+        let tree = match load_config_tree(&path) {
+            Ok(Some(tree)) => tree,
             Ok(None) => {
                 return LoadedConfig {
                     config: Self::default(),
@@ -136,19 +139,24 @@ impl Config {
                 };
             }
             Err(err) => {
-                warn!(err = %err, "config read error, using defaults");
+                warn!(err = %err, "config load error, using defaults");
                 return LoadedConfig {
                     config: Self::default(),
-                    diagnostics: vec![format!("config read error: {err}; using defaults")],
+                    diagnostics: vec![format!("{err}; using defaults")],
                     invalid_sections: Vec::new(),
                 };
             }
         };
 
-        match deserialize_with_ignored::<Config, _>(toml::Deserializer::new(&content)) {
+        match deserialize_with_ignored::<Config, _>(tree.value.clone()) {
             Ok((config, ignored_keys)) => {
+                let table = tree
+                    .value
+                    .as_table()
+                    .expect("config tree is always a table");
+                let origins = (tree.sources.len() > 1).then_some(&tree.origins);
                 let (unknown_sections, mut diagnostics) =
-                    unknown_top_level_sections_from_str(&content);
+                    unknown_top_level_sections(table, origins);
                 diagnostics.extend(unknown_config_key_diagnostics(
                     ignored_keys
                         .into_iter()
@@ -157,6 +165,7 @@ impl Config {
                         })
                         .collect(),
                     None,
+                    origins,
                 ));
                 diagnostics.extend(config.collect_diagnostics());
                 LoadedConfig {
@@ -166,10 +175,23 @@ impl Config {
                 }
             }
             Err(err) => {
+                let diagnostic = if tree.sources.len() > 1 {
+                    let sources = tree
+                        .sources
+                        .iter()
+                        .map(|source| source.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
+                    format!(
+                        "config parse error: effective config from {sources}: {err}; using defaults"
+                    )
+                } else {
+                    format!("config parse error: {err}; using defaults")
+                };
                 warn!(err = %err, "config parse error, using defaults");
                 LoadedConfig {
                     config: Self::default(),
-                    diagnostics: vec![format!("config parse error: {err}; using defaults")],
+                    diagnostics: vec![diagnostic],
                     invalid_sections: Vec::new(),
                 }
             }
@@ -243,46 +265,53 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
 
 pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {
     let path = config_path();
-    let content = match read_optional_config(&path) {
-        Ok(Some(content)) => content,
-        Ok(None) => {
-            return Ok(LoadedConfig {
-                config: Config::default(),
-                diagnostics: Vec::new(),
-                invalid_sections: Vec::new(),
-            });
-        }
-        Err(err) => {
-            return Err(vec![format!(
-                "config read error: {err}; keeping current config"
-            )]);
-        }
-    };
-    load_live_config_from_str(&content)
+    match load_config_tree(&path) {
+        Ok(Some(tree)) => load_live_config_from_tree(tree),
+        Ok(None) => Ok(LoadedConfig {
+            config: Config::default(),
+            diagnostics: Vec::new(),
+            invalid_sections: Vec::new(),
+        }),
+        Err(err) => Err(vec![format!("{err}; keeping current config")]),
+    }
 }
 
+#[cfg(test)]
 fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>> {
     let value = content
         .parse::<toml::Value>()
         .map_err(|err| vec![format!("config parse error: {err}; keeping current config")])?;
-    let table = value.as_table().ok_or_else(|| {
+    load_live_config_from_tree(ConfigTree {
+        value,
+        origins: ConfigOrigins::new(),
+        sources: Vec::new(),
+    })
+}
+
+fn load_live_config_from_tree(tree: ConfigTree) -> Result<LoadedConfig, Vec<String>> {
+    let table = tree.value.as_table().ok_or_else(|| {
         vec![
             "config parse error: top-level config must be a table; keeping current config"
                 .to_string(),
         ]
     })?;
+    let origins = (tree.sources.len() > 1).then_some(&tree.origins);
 
     let mut config = Config::default();
-    let mut diagnostics = unknown_top_level_section_diagnostics(table);
-    diagnostics.extend(unknown_top_level_config_key_diagnostics(table));
+    let mut diagnostics = unknown_top_level_section_diagnostics(table, origins);
+    diagnostics.extend(unknown_top_level_config_key_diagnostics(table, origins));
     let mut invalid_sections = Vec::new();
 
     if let Some(value) = table.get("onboarding") {
         match value.clone().try_into::<Option<bool>>() {
             Ok(onboarding) => config.onboarding = onboarding,
-            Err(err) => diagnostics.push(format!(
-                "invalid onboarding setting: {err}; keeping current onboarding state"
-            )),
+            Err(err) => {
+                let path = vec![ConfigKeyPathSegment::Key("onboarding".to_string())];
+                diagnostics.push(format!(
+                    "invalid onboarding setting{}: {err}; keeping current onboarding state",
+                    config_source_suffix(config_source(origins, &path))
+                ));
+            }
         }
     }
 
@@ -292,6 +321,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "theme config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.theme = section,
     );
     load_live_section(
@@ -300,6 +330,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "keybinding config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.keys = section,
     );
     load_live_section(
@@ -308,6 +339,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "terminal config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.terminal = section,
     );
     load_live_section(
@@ -316,6 +348,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "session config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.session = section,
     );
     load_live_section(
@@ -324,6 +357,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "server config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.server = section,
     );
     load_live_section(
@@ -332,6 +366,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "update config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.update = section,
     );
     load_live_section(
@@ -340,6 +375,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "ui config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.ui = section,
     );
     load_live_section(
@@ -348,6 +384,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "advanced config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.advanced = section,
     );
     load_live_section(
@@ -356,6 +393,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "worktree config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.worktrees = section,
     );
     load_live_section(
@@ -364,6 +402,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "experimental config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.experimental = section,
     );
     load_live_section(
@@ -372,6 +411,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         "remote config",
         &mut diagnostics,
         &mut invalid_sections,
+        origins,
         |section| config.remote = section,
     );
 
@@ -384,18 +424,17 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     })
 }
 
-fn unknown_top_level_sections_from_str(content: &str) -> (Vec<String>, Vec<String>) {
-    let Ok(value) = content.parse::<toml::Value>() else {
-        return (Vec::new(), Vec::new());
-    };
-    let Some(table) = value.as_table() else {
-        return (Vec::new(), Vec::new());
-    };
-
+fn unknown_top_level_sections(
+    table: &toml::map::Map<String, toml::Value>,
+    origins: Option<&ConfigOrigins>,
+) -> (Vec<String>, Vec<String>) {
     let mut keys = Vec::new();
     let mut diagnostics = Vec::new();
     for (key, value) in table {
-        if let Some(diagnostic) = unknown_top_level_section_diagnostic(key, value) {
+        let path = vec![ConfigKeyPathSegment::Key(key.clone())];
+        if let Some(diagnostic) =
+            unknown_top_level_section_diagnostic(key, value, config_source(origins, &path))
+        {
             keys.push(key.clone());
             diagnostics.push(diagnostic);
         }
@@ -405,14 +444,22 @@ fn unknown_top_level_sections_from_str(content: &str) -> (Vec<String>, Vec<Strin
 
 fn unknown_top_level_section_diagnostics(
     table: &toml::map::Map<String, toml::Value>,
+    origins: Option<&ConfigOrigins>,
 ) -> Vec<String> {
     table
         .iter()
-        .filter_map(|(key, value)| unknown_top_level_section_diagnostic(key, value))
+        .filter_map(|(key, value)| {
+            let path = vec![ConfigKeyPathSegment::Key(key.clone())];
+            unknown_top_level_section_diagnostic(key, value, config_source(origins, &path))
+        })
         .collect()
 }
 
-fn unknown_top_level_section_diagnostic(key: &str, value: &toml::Value) -> Option<String> {
+fn unknown_top_level_section_diagnostic(
+    key: &str,
+    value: &toml::Value,
+    source: Option<&Path>,
+) -> Option<String> {
     if KNOWN_TOP_LEVEL_CONFIG_KEYS.contains(&key) {
         return None;
     }
@@ -430,31 +477,35 @@ fn unknown_top_level_section_diagnostic(key: &str, value: &toml::Value) -> Optio
 
     if key == "toast" {
         Some(format!(
-            "unknown config section {header}; did you mean [ui.toast]? ignoring section"
+            "unknown config section {header}{}; did you mean [ui.toast]? ignoring section",
+            config_source_suffix(source)
         ))
     } else {
-        Some(format!("unknown config section {header}; ignoring section"))
+        Some(format!(
+            "unknown config section {header}{}; ignoring section",
+            config_source_suffix(source)
+        ))
     }
 }
 
 fn unknown_top_level_config_key_diagnostics(
     table: &toml::map::Map<String, toml::Value>,
+    origins: Option<&ConfigOrigins>,
 ) -> Vec<String> {
     let paths = table
         .iter()
         .filter(|(key, value)| {
             !KNOWN_TOP_LEVEL_CONFIG_KEYS.contains(&key.as_str())
-                && unknown_top_level_section_diagnostic(key, value).is_none()
+                && unknown_top_level_section_diagnostic(
+                    key,
+                    value,
+                    config_source(origins, &[ConfigKeyPathSegment::Key(key.to_string())]),
+                )
+                .is_none()
         })
         .map(|(key, _)| vec![ConfigKeyPathSegment::Key(key.clone())])
         .collect();
-    unknown_config_key_diagnostics(paths, None)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum ConfigKeyPathSegment {
-    Key(String),
-    Index(usize),
+    unknown_config_key_diagnostics(paths, None, origins)
 }
 
 fn config_key_path(path: &serde_ignored::Path<'_>) -> Vec<ConfigKeyPathSegment> {
@@ -501,6 +552,7 @@ fn format_config_key_path(path: &[ConfigKeyPathSegment]) -> String {
 fn unknown_config_key_diagnostics(
     paths: Vec<Vec<ConfigKeyPathSegment>>,
     section: Option<&str>,
+    origins: Option<&ConfigOrigins>,
 ) -> Vec<String> {
     let mut paths: Vec<Vec<ConfigKeyPathSegment>> = paths
         .into_iter()
@@ -517,11 +569,26 @@ fn unknown_config_key_diagnostics(
         .into_iter()
         .map(|path| {
             format!(
-                "unknown config key {}; ignoring key",
-                format_config_key_path(&path)
+                "unknown config key {}{}; ignoring key",
+                format_config_key_path(&path),
+                config_source_suffix(config_source(origins, &path))
             )
         })
         .collect()
+}
+
+fn config_source<'a>(
+    origins: Option<&'a ConfigOrigins>,
+    path: &[ConfigKeyPathSegment],
+) -> Option<&'a Path> {
+    let origins = origins?;
+    (1..=path.len())
+        .rev()
+        .find_map(|length| origins.get(&path[..length]).map(PathBuf::as_path))
+}
+
+fn config_source_suffix(source: Option<&Path>) -> String {
+    source.map_or_else(String::new, |path| format!(" in {}", path.display()))
 }
 
 fn deserialize_with_ignored<'de, T, D>(
@@ -544,6 +611,7 @@ fn load_live_section<T>(
     label: &str,
     diagnostics: &mut Vec<String>,
     invalid_sections: &mut Vec<String>,
+    origins: Option<&ConfigOrigins>,
     apply: impl FnOnce(T),
 ) where
     T: serde::de::DeserializeOwned,
@@ -554,12 +622,18 @@ fn load_live_section<T>(
 
     match deserialize_with_ignored(value.clone()) {
         Ok((section_config, ignored_keys)) => {
-            diagnostics.extend(unknown_config_key_diagnostics(ignored_keys, Some(section)));
+            diagnostics.extend(unknown_config_key_diagnostics(
+                ignored_keys,
+                Some(section),
+                origins,
+            ));
             apply(section_config);
         }
         Err(err) => {
+            let source = vec![ConfigKeyPathSegment::Key(section.to_string())];
             diagnostics.push(format!(
-                "invalid {label}: {err}; keeping current {section} settings"
+                "invalid {label}{}: {err}; keeping current {section} settings",
+                config_source_suffix(config_source(origins, &source))
             ));
             invalid_sections.push(section.to_string());
         }
@@ -749,6 +823,283 @@ fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn inheritance_test_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "herdr-config-inheritance-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn config_inheritance_merges_tables_and_replaces_scalars_and_arrays() {
+        let dir = inheritance_test_dir("merge");
+        let base = dir.join("base.toml");
+        let child = dir.join("config.toml");
+        std::fs::write(
+            &base,
+            "[ui]\nmouse_capture = true\n[ui.toast]\ndelivery = \"system\"\n[custom]\nitems = [1, 2]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &child,
+            "extends = \"base.toml\"\n[ui]\nmouse_capture = false\n[custom]\nitems = [3]\n",
+        )
+        .unwrap();
+
+        let tree = load_config_tree(&child).unwrap().unwrap();
+        assert_eq!(tree.value["ui"]["mouse_capture"].as_bool(), Some(false));
+        assert_eq!(
+            tree.value["ui"]["toast"]["delivery"].as_str(),
+            Some("system")
+        );
+        assert_eq!(
+            tree.value["custom"]["items"].as_array().unwrap(),
+            &[toml::Value::Integer(3)]
+        );
+        assert!(tree.value.get("extends").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn inherited_sections_remain_visible_to_child_only_config_commands() {
+        let dir = inheritance_test_dir("effective-section");
+        let child = dir.join("config.toml");
+        std::fs::write(dir.join("base.toml"), "[keys]\nprefix = \"ctrl+a\"\n").unwrap();
+        std::fs::write(&child, "extends = \"base.toml\"\n").unwrap();
+
+        assert!(
+            super::super::inheritance::effective_config_contains_section(&child, "keys").unwrap()
+        );
+        assert!(
+            !super::super::inheritance::effective_config_contains_section(&child, "theme").unwrap()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_inheritance_resolves_each_relative_edge_from_its_source() {
+        let dir = inheritance_test_dir("relative-chain");
+        let middle_dir = dir.join("nested");
+        let leaf_dir = middle_dir.join("leaf");
+        std::fs::create_dir_all(&leaf_dir).unwrap();
+        std::fs::write(dir.join("base.toml"), "[ui]\nmouse_capture = false\n").unwrap();
+        std::fs::write(
+            middle_dir.join("middle.toml"),
+            "extends = \"../base.toml\"\n[ui.toast]\ndelivery = \"system\"\n",
+        )
+        .unwrap();
+        let child = leaf_dir.join("config.toml");
+        std::fs::write(
+            &child,
+            "extends = \"../middle.toml\"\n[ui]\nredraw_on_focus_gained = false\n",
+        )
+        .unwrap();
+
+        let tree = load_config_tree(&child).unwrap().unwrap();
+        assert_eq!(tree.value["ui"]["mouse_capture"].as_bool(), Some(false));
+        assert_eq!(
+            tree.value["ui"]["toast"]["delivery"].as_str(),
+            Some("system")
+        );
+        assert_eq!(
+            tree.value["ui"]["redraw_on_focus_gained"].as_bool(),
+            Some(false)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_inheritance_expands_home_and_reports_unknown_key_sources() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let dir = inheritance_test_dir("home-source");
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let base = home.join("shared.toml");
+        let child = dir.join("config.toml");
+        std::fs::write(&base, "[ui]\nmouse_captur = false\n").unwrap();
+        std::fs::write(&child, "extends = \"~/shared.toml\"\n").unwrap();
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+
+        let tree = load_config_tree(&child).unwrap().unwrap();
+        let loaded = load_live_config_from_tree(tree).unwrap();
+        assert_eq!(loaded.diagnostics.len(), 1);
+        assert!(loaded.diagnostics[0].contains("ui.mouse_captur"));
+        assert!(loaded.diagnostics[0].contains(&base.display().to_string()));
+
+        if let Some(previous_home) = previous_home {
+            std::env::set_var("HOME", previous_home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn startup_and_live_reload_share_the_effective_inherited_config() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let dir = inheritance_test_dir("loader-parity");
+        let child = dir.join("config.toml");
+        std::fs::write(
+            dir.join("base.toml"),
+            "[ui]\nmouse_capture = false\n[ui.toast]\ndelivery = \"system\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &child,
+            "extends = \"base.toml\"\n[ui.toast]\ndelivery = \"herdr\"\n",
+        )
+        .unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &child);
+
+        let startup = Config::load();
+        let live = load_live_config().unwrap();
+        assert!(!startup.config.ui.mouse_capture);
+        assert!(!live.config.ui.mouse_capture);
+        assert_eq!(
+            startup.config.ui.toast.delivery,
+            super::super::ToastDelivery::Herdr
+        );
+        assert_eq!(
+            live.config.ui.toast.delivery,
+            super::super::ToastDelivery::Herdr
+        );
+        assert!(startup.diagnostics.is_empty());
+        assert!(live.diagnostics.is_empty());
+
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn inherited_value_errors_name_the_contributing_parent() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let dir = inheritance_test_dir("invalid-inherited-value");
+        let parent = dir.join("base.toml");
+        let child = dir.join("config.toml");
+        std::fs::write(&parent, "[server]\nheadless_cols = \"wide\"\n").unwrap();
+        std::fs::write(&child, "extends = \"base.toml\"\n").unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &child);
+
+        let startup = Config::load();
+        assert!(startup.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains(&parent.display().to_string())
+                && diagnostic.contains(&child.display().to_string())
+                && diagnostic.contains("using defaults")
+        }));
+        let live = load_live_config().unwrap();
+        assert_eq!(live.invalid_sections, vec!["server"]);
+        assert!(live.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("invalid server config")
+                && diagnostic.contains(&parent.display().to_string())
+        }));
+
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_inheritance_rejects_invalid_directives_and_missing_parents() {
+        let dir = inheritance_test_dir("invalid-directive");
+        let child = dir.join("config.toml");
+        std::fs::write(&child, "extends = [\"base.toml\"]\n").unwrap();
+        let error = load_config_tree(&child).err().unwrap();
+        assert!(error.contains("extends must be one non-empty path string"));
+        assert!(error.contains(&child.display().to_string()));
+
+        std::fs::write(&child, "extends = \"missing.toml\"\n").unwrap();
+        let error = load_config_tree(&child).err().unwrap();
+        assert!(error.contains("file not found"));
+        assert!(error.contains("missing.toml"));
+        assert!(error.contains("extended from"));
+
+        std::fs::write(&child, "extends = \"~someone/config.toml\"\n").unwrap();
+        let error = load_config_tree(&child).err().unwrap();
+        assert!(error.contains("unsupported extends path"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_inheritance_allows_child_values_to_change_type() {
+        let mut base: toml::Value = "value = 1\n".parse().unwrap();
+        let child: toml::Value = "value = { nested = true }\n".parse().unwrap();
+        merge_config_values(&mut base, child);
+        assert_eq!(base["value"]["nested"].as_bool(), Some(true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_inheritance_detects_cycles_through_symlink_aliases() {
+        let dir = inheritance_test_dir("symlink-cycle");
+        let child = dir.join("config.toml");
+        let alias = dir.join("alias.toml");
+        std::fs::write(&child, "extends = \"alias.toml\"\n").unwrap();
+        std::os::unix::fs::symlink(&child, &alias).unwrap();
+
+        let error = load_config_tree(&child).err().unwrap();
+        assert!(error.contains("cycle detected"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_inheritance_rejects_cycles_with_the_source_chain() {
+        let dir = inheritance_test_dir("cycle");
+        let first = dir.join("first.toml");
+        let second = dir.join("second.toml");
+        std::fs::write(&first, "extends = \"second.toml\"\n").unwrap();
+        std::fs::write(&second, "extends = \"first.toml\"\n").unwrap();
+
+        let error = load_config_tree(&first).err().unwrap();
+        assert!(error.contains("cycle detected"));
+        assert!(error.contains("first.toml"));
+        assert!(error.contains("second.toml"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_inheritance_rejects_chains_beyond_the_limit() {
+        let dir = inheritance_test_dir("depth");
+        for index in 0..=MAX_CONFIG_EXTENDS_DEPTH {
+            let content = if index == MAX_CONFIG_EXTENDS_DEPTH {
+                "[ui]\nmouse_capture = false\n".to_string()
+            } else {
+                format!("extends = \"{}.toml\"\n", index + 1)
+            };
+            std::fs::write(dir.join(format!("{index}.toml")), content).unwrap();
+        }
+
+        let error = load_config_tree(&dir.join("0.toml")).err().unwrap();
+        assert!(error.contains("maximum chain depth of 16"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn invalid_inherited_config_names_the_parent_and_preserves_reload_state() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let dir = inheritance_test_dir("invalid-parent");
+        let parent = dir.join("base.toml");
+        let child = dir.join("config.toml");
+        std::fs::write(&parent, "[ui\n").unwrap();
+        std::fs::write(&child, "extends = \"base.toml\"\n").unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &child);
+
+        let startup = Config::load();
+        assert!(startup.diagnostics.iter().any(|diagnostic| diagnostic
+            .contains(&parent.display().to_string())
+            && diagnostic.contains("using defaults")));
+        let live = load_live_config().unwrap_err();
+        assert!(live.iter().any(|diagnostic| {
+            diagnostic.contains(&parent.display().to_string())
+                && diagnostic.contains("keeping current config")
+        }));
+
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn upsert_top_level_bool_replaces_existing_value() {

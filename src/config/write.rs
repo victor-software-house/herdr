@@ -79,6 +79,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn update_file_at_preserves_extends_and_never_writes_the_parent() {
+        let dir =
+            std::env::temp_dir().join(format!("herdr-config-child-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let parent = dir.join("base.toml");
+        let child = dir.join("config.toml");
+        let parent_content = "[theme]\nname = \"dracula\"\n";
+        std::fs::write(&parent, parent_content).unwrap();
+        std::fs::write(&child, "extends = \"base.toml\"\n").unwrap();
+
+        update_file_at(&child, "theme", |content| {
+            ConfigEdit::Theme("catppuccin").apply(content)
+        })
+        .unwrap();
+
+        let written = std::fs::read_to_string(&child).unwrap();
+        assert!(written.contains("extends = \"base.toml\""));
+        assert!(written.contains("name = \"catppuccin\""));
+        assert_eq!(std::fs::read_to_string(&parent).unwrap(), parent_content);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn update_file_at_does_not_move_a_leading_bom_into_the_file() {
         let dir = std::env::temp_dir().join(format!("herdr-config-bom-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

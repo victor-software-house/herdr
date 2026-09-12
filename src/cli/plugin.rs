@@ -47,7 +47,7 @@ pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_link(args: &[String]) -> std::io::Result<i32> {
     let Some(path) = args.first() else {
-        eprintln!("usage: herdr plugin link <path> [--disabled]");
+        eprintln!("usage: herdl plugin link <path> [--disabled]");
         return Ok(2);
     };
     let path = normalize_plugin_path_arg(path)?;
@@ -87,11 +87,11 @@ fn plugin_link(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_config_dir_command(args: &[String]) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
-        eprintln!("usage: herdr plugin config-dir <plugin_id>");
+        eprintln!("usage: herdl plugin config-dir <plugin_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin config-dir <plugin_id>");
+        eprintln!("usage: herdl plugin config-dir <plugin_id>");
         return Ok(2);
     }
     let path = crate::plugin_paths::plugin_config_dir(plugin_id);
@@ -139,11 +139,11 @@ fn plugin_list(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
+        eprintln!("usage: herdl plugin unlink <plugin_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
+        eprintln!("usage: herdl plugin unlink <plugin_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginUnlink(PluginUnlinkParams {
@@ -153,7 +153,7 @@ fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_install(args: &[String]) -> std::io::Result<i32> {
     let Some(source_arg) = args.first() else {
-        eprintln!("usage: herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
+        eprintln!("usage: herdl plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
         return Ok(2);
     };
     let source = match GithubPluginSource::parse(source_arg) {
@@ -262,11 +262,11 @@ fn plugin_install(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("usage: herdl plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("usage: herdl plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     }
 
@@ -328,14 +328,14 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
 fn plugin_set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
         eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
+            "usage: herdl plugin {} <plugin_id>",
             if enabled { "enable" } else { "disable" }
         );
         return Ok(2);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
+            "usage: herdl plugin {} <plugin_id>",
             if enabled { "enable" } else { "disable" }
         );
         return Ok(2);
@@ -430,7 +430,7 @@ fn plugin_action_list(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_action_invoke(args: &[String]) -> std::io::Result<i32> {
     let Some(action_id) = args.first() else {
-        eprintln!("usage: herdr plugin action invoke <action_id> [--plugin ID]");
+        eprintln!("usage: herdl plugin action invoke <action_id> [--plugin ID]");
         return Ok(2);
     };
     let mut plugin_id = None;
@@ -640,11 +640,11 @@ fn parse_popup_dimension(value: &str, flag: &str) -> Option<PopupSize> {
 
 fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
+        eprintln!("usage: herdl plugin pane focus <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
+        eprintln!("usage: herdl plugin pane focus <pane_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginPaneFocus(PluginPaneFocusParams {
@@ -654,11 +654,11 @@ fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_pane_close(args: &[String]) -> std::io::Result<i32> {
     let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
+        eprintln!("usage: herdl plugin pane close <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
+        eprintln!("usage: herdl plugin pane close <pane_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginPaneClose(PluginPaneCloseParams {
@@ -737,7 +737,7 @@ impl GithubPluginSource {
         }
         let parts = value.split('/').collect::<Vec<_>>();
         if parts.len() < 2 {
-            return Err("usage: herdr plugin install <owner>/<repo>[/subdir...]".into());
+            return Err("usage: herdl plugin install <owner>/<repo>[/subdir...]".into());
         }
         let owner = parts[0];
         let repo = parts[1];
@@ -1509,20 +1509,22 @@ fn read_tail_capped_output(mut reader: impl Read, cap: usize) -> CappedOutput {
 }
 
 fn scrub_herdr_runtime_env(command: &mut Command) {
+    crate::product::scrub_foreign_command_env(command);
     for key in [
         crate::api::SOCKET_PATH_ENV_VAR,
         crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
         crate::session::SESSION_ENV_VAR,
-        "HERDR_BIN_PATH",
-        "HERDR_ENV",
-        "HERDR_WORKSPACE_ID",
-        "HERDR_TAB_ID",
-        "HERDR_PANE_ID",
+        crate::product::CONFIG_PATH_ENV_VAR,
+        crate::product::BIN_PATH_ENV_VAR,
+        crate::product::ENV_VAR,
+        crate::product::WORKSPACE_ID_ENV_VAR,
+        crate::product::TAB_ID_ENV_VAR,
+        crate::product::PANE_ID_ENV_VAR,
     ] {
         command.env_remove(key);
     }
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("HERDR_PLUGIN_") {
+        if key.to_string_lossy().starts_with("HERDL_PLUGIN_") {
             command.env_remove(key);
         }
     }

@@ -158,7 +158,7 @@ pub(super) fn caller_pane_id() -> Option<String> {
     if is_remote() {
         return None;
     }
-    std::env::var("HERDR_PANE_ID")
+    std::env::var(crate::product::PANE_ID_ENV_VAR)
         .ok()
         .filter(|value| !value.trim().is_empty())
 }
@@ -204,7 +204,7 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
         return Err("--machine cannot be combined with other launch options; it uses the saved machine's session".into());
     }
     if index >= args.len() || args[index] == "--" {
-        return Err("usage: herdr --machine <label-or-id> <command>".into());
+        return Err("usage: herdl --machine <label-or-id> <command>".into());
     }
     let mut cleaned = vec![args[0].clone()];
     cleaned.extend_from_slice(&args[index..]);

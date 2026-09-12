@@ -226,7 +226,7 @@ pub(super) fn is_ssh_session() -> bool {
 
 #[cfg(windows)]
 pub(super) fn windows_vti_input_backend_enabled() -> bool {
-    std::env::var("HERDR_WINDOWS_INPUT_BACKEND")
+    std::env::var("HERDL_WINDOWS_INPUT_BACKEND")
         .map(|backend| !backend.eq_ignore_ascii_case("crossterm"))
         .unwrap_or(true)
 }
@@ -378,7 +378,7 @@ fn pop_keyboard_enhancement_flags() -> io::Result<()> {
 
 #[cfg(windows)]
 fn windows_win32_input_mode_enabled() -> bool {
-    std::env::var("HERDR_WINDOWS_INPUT_PROBE")
+    std::env::var("HERDL_WINDOWS_INPUT_PROBE")
         .map(|probe| probe.eq_ignore_ascii_case("win32"))
         .unwrap_or(true)
 }

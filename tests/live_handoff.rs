@@ -61,10 +61,10 @@ fn spawn_server_with_env(
     api_socket: &Path,
     extra_env: &[(&str, &str)],
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("herdl-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("herdl-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -77,14 +77,14 @@ fn spawn_server_with_env(
             pixel_height: 0,
         })
         .unwrap();
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdl"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", api_socket);
+    cmd.env("HERDL_SOCKET_PATH", api_socket);
     cmd.env(
-        "HERDR_CLIENT_SOCKET_PATH",
-        runtime_dir.join("herdr-client.sock"),
+        "HERDL_CLIENT_SOCKET_PATH",
+        runtime_dir.join("herdl-client.sock"),
     );
     cmd.env("SHELL", "/bin/sh");
     for (key, value) in extra_env {
@@ -104,10 +104,10 @@ fn spawn_named_session_server(
     runtime_dir: &Path,
     session_name: &str,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herdl-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     fs::write(
-        config_home.join("herdr-dev/config.toml"),
+        config_home.join("herdl-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -120,13 +120,13 @@ fn spawn_named_session_server(
             pixel_height: 0,
         })
         .unwrap();
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdl"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SESSION", session_name);
-    cmd.env_remove("HERDR_SOCKET_PATH");
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("HERDL_SESSION", session_name);
+    cmd.env_remove("HERDL_SOCKET_PATH");
+    cmd.env_remove("HERDL_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
@@ -138,10 +138,10 @@ fn spawn_named_session_server(
 }
 
 fn spawn_default_session_server(config_home: &Path, runtime_dir: &Path) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herdl-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     fs::write(
-        config_home.join("herdr-dev/config.toml"),
+        config_home.join("herdl-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -154,14 +154,14 @@ fn spawn_default_session_server(config_home: &Path, runtime_dir: &Path) -> Spawn
             pixel_height: 0,
         })
         .unwrap();
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdl"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
-    cmd.env_remove("HERDR_SESSION");
-    cmd.env_remove("HERDR_SOCKET_PATH");
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env_remove("HERDL_SESSION");
+    cmd.env_remove("HERDL_SOCKET_PATH");
+    cmd.env_remove("HERDL_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
@@ -179,10 +179,10 @@ fn spawn_server_with_args_and_socket_env(
     api_socket_env: Option<&Path>,
     client_socket_env: Option<&Path>,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herdl-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     fs::write(
-        config_home.join("herdr-dev/config.toml"),
+        config_home.join("herdl-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -195,7 +195,7 @@ fn spawn_server_with_args_and_socket_env(
             pixel_height: 0,
         })
         .unwrap();
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdl"));
     if let Some(session_name) = session_name {
         cmd.arg("--session");
         cmd.arg(session_name);
@@ -203,16 +203,16 @@ fn spawn_server_with_args_and_socket_env(
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env_remove("HERDR_SESSION");
+    cmd.env_remove("HERDL_SESSION");
     if let Some(api_socket_env) = api_socket_env {
-        cmd.env("HERDR_SOCKET_PATH", api_socket_env);
+        cmd.env("HERDL_SOCKET_PATH", api_socket_env);
     } else {
-        cmd.env_remove("HERDR_SOCKET_PATH");
+        cmd.env_remove("HERDL_SOCKET_PATH");
     }
     if let Some(client_socket_env) = client_socket_env {
-        cmd.env("HERDR_CLIENT_SOCKET_PATH", client_socket_env);
+        cmd.env("HERDL_CLIENT_SOCKET_PATH", client_socket_env);
     } else {
-        cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+        cmd.env_remove("HERDL_CLIENT_SOCKET_PATH");
     }
     cmd.env("SHELL", "/bin/sh");
 
@@ -471,7 +471,7 @@ fn wait_for_replacement_server_pid(runtime_dir: &Path, old_pid: u32, timeout: Du
 
 #[cfg(target_os = "macos")]
 fn wait_for_replacement_server_pid(_runtime_dir: &Path, old_pid: u32, timeout: Duration) -> u32 {
-    let handoff_socket_pattern = format!("herdr-handoff-{old_pid}.sock");
+    let handoff_socket_pattern = format!("herdl-handoff-{old_pid}.sock");
     let deadline = Instant::now() + timeout;
     let mut last_stdout = String::new();
     while Instant::now() < deadline {
@@ -537,7 +537,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -619,7 +619,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -688,7 +688,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
     }
 
     let session: serde_json::Value = serde_json::from_slice(
-        &fs::read(config_home.join("herdr-dev/session.json")).expect("saved session"),
+        &fs::read(config_home.join("herdl-dev/session.json")).expect("saved session"),
     )
     .expect("valid session json");
     assert_eq!(session["workspaces"].as_array().map(Vec::len), Some(1));
@@ -708,9 +708,9 @@ fn live_handoff_preserves_named_session_socket_paths() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let session_dir = config_home.join("herdr-dev/sessions/work");
-    let api_socket = session_dir.join("herdr.sock");
-    let client_socket = session_dir.join("herdr-client.sock");
+    let session_dir = config_home.join("herdl-dev/sessions/work");
+    let api_socket = session_dir.join("herdl.sock");
+    let client_socket = session_dir.join("herdl-client.sock");
 
     let spawned = spawn_named_session_server(&config_home, &runtime_dir, "work");
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -724,7 +724,7 @@ fn live_handoff_preserves_named_session_socket_paths() {
     wait_for_api(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(5));
     assert!(
-        !config_home.join("herdr-dev/herdr.sock").exists(),
+        !config_home.join("herdl-dev/herdl.sock").exists(),
         "named handoff unexpectedly bound the default session API socket"
     );
 
@@ -741,12 +741,12 @@ fn live_handoff_ignores_leaked_default_socket_env_for_named_session() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let default_session_dir = config_home.join("herdr-dev");
-    let default_api_socket = default_session_dir.join("herdr.sock");
-    let default_client_socket = default_session_dir.join("herdr-client.sock");
-    let work_session_dir = config_home.join("herdr-dev/sessions/work");
-    let work_api_socket = work_session_dir.join("herdr.sock");
-    let work_client_socket = work_session_dir.join("herdr-client.sock");
+    let default_session_dir = config_home.join("herdl-dev");
+    let default_api_socket = default_session_dir.join("herdl.sock");
+    let default_client_socket = default_session_dir.join("herdl-client.sock");
+    let work_session_dir = config_home.join("herdl-dev/sessions/work");
+    let work_api_socket = work_session_dir.join("herdl.sock");
+    let work_client_socket = work_session_dir.join("herdl-client.sock");
 
     let default_spawned = spawn_default_session_server(&config_home, &runtime_dir);
     wait_for_socket(&default_api_socket, Duration::from_secs(10));
@@ -788,7 +788,7 @@ fn live_handoff_preserves_client_socket_env_without_api_socket_env() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = config_home.join("herdr-dev/herdr.sock");
+    let api_socket = config_home.join("herdl-dev/herdl.sock");
     let client_socket = runtime_dir.join("custom-client.sock");
 
     let spawned = spawn_server_with_args_and_socket_env(
@@ -823,8 +823,8 @@ fn live_handoff_preserves_installed_plugins() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = config_home.join("herdr-dev/herdr.sock");
-    let registry_path = config_home.join("herdr-dev/plugins.json");
+    let api_socket = config_home.join("herdl-dev/herdl.sock");
+    let registry_path = config_home.join("herdl-dev/plugins.json");
     let existing_plugin = base.join("plugins/existing");
     let added_plugin = base.join("plugins/added");
     write_plugin_manifest(&existing_plugin, "test.live-handoff-existing");
@@ -870,8 +870,8 @@ fn live_handoff_preserves_pane_process_io() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
+    let client_socket = runtime_dir.join("herdl-client.sock");
     let marker = base.join("child.pid");
     let second_marker = base.join("second-child.pid");
     let hup_marker = base.join("hup");
@@ -1069,8 +1069,8 @@ fn live_handoff_preserves_keyboard_protocol_for_client_input() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
+    let client_socket = runtime_dir.join("herdl-client.sock");
     let script = base.join("read-raw.py");
     let ready_marker = base.join("keyboard-ready");
     let received_marker = base.join("keyboard-received");
@@ -1165,8 +1165,8 @@ fn live_handoff_preserves_modify_other_keys_for_client_input() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
+    let client_socket = runtime_dir.join("herdl-client.sock");
     let script = base.join("read-raw.py");
     let ready_marker = base.join("modify-ready");
     let received_marker = base.join("modify-received");
@@ -1265,7 +1265,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
     let pane_id_marker = base.join("pane-id");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
@@ -1289,7 +1289,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
         serde_json::json!({
             "id": "test:pane:print-id",
             "method": "pane.send_input",
-            "params": {"pane_id": pane_id, "text": format!("printf '%s' \"$HERDR_PANE_ID\" > {}", pane_id_marker.display()), "keys": ["Enter"]}
+            "params": {"pane_id": pane_id, "text": format!("printf '%s' \"$HERDL_PANE_ID\" > {}", pane_id_marker.display()), "keys": ["Enter"]}
         }),
     ));
     let old_pane_id = wait_for_file_contains(&pane_id_marker, &pane_id, Duration::from_secs(5));
@@ -1350,7 +1350,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
     let old_session = base.join("old-session.jsonl");
     let new_session = base.join("new-session.jsonl");
     let started_marker = base.join("agent-started");
@@ -1359,7 +1359,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\n/bin/sleep 30\n:\n",
+            "#!/bin/sh\nexport HERDL_AGENT=pi\necho started > {}\n/bin/sleep 30\n:\n",
             started_marker.display()
         ),
     )
@@ -1505,7 +1505,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
     let started_marker = base.join("agent-started");
     let exited_marker = base.join("agent-exited");
     let shell_marker = base.join("shell-after-agent");
@@ -1515,7 +1515,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\n/bin/sleep 1\necho exited > {}\n",
+            "#!/bin/sh\nexport HERDL_AGENT=pi\necho started > {}\n/bin/sleep 1\necho exited > {}\n",
             started_marker.display(),
             exited_marker.display()
         ),
@@ -1594,7 +1594,7 @@ fn live_handoff_keeps_shell_pane_after_foreground_process_exits() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
     let started_marker = base.join("foreground-started");
     let exited_marker = base.join("foreground-exited");
     let shell_marker = base.join("shell-after-foreground");
@@ -1661,8 +1661,8 @@ fn live_handoff_preserves_python_http_server() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
+    let client_socket = runtime_dir.join("herdl-client.sock");
     let web_root = base.join("web");
     fs::create_dir_all(&web_root).unwrap();
     fs::write(
@@ -1734,10 +1734,10 @@ fn live_handoff_preserves_http_servers_across_multiple_sessions() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let sessions = [
-        (None, config_home.join("herdr-dev/herdr.sock")),
+        (None, config_home.join("herdl-dev/herdl.sock")),
         (
             Some("work"),
-            config_home.join("herdr-dev/sessions/work/herdr.sock"),
+            config_home.join("herdl-dev/sessions/work/herdl.sock"),
         ),
     ];
     let mut spawned = Vec::new();
@@ -1826,7 +1826,7 @@ fn live_handoff_bad_expected_protocol_rolls_back_old_server() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
     let marker = base.join("child.pid");
     let received_marker = base.join("received");
 
@@ -1906,8 +1906,8 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let api_socket = runtime_dir.join("herdl.sock");
+    let client_socket = runtime_dir.join("herdl-client.sock");
     let marker = base.join("child.pid");
     let received_marker = base.join("received");
 
@@ -1915,7 +1915,7 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
         &config_home,
         &runtime_dir,
         &api_socket,
-        &[("HERDR_TEST_HANDOFF_IMPORT_FAIL", failure_point)],
+        &[("HERDL_TEST_HANDOFF_IMPORT_FAIL", failure_point)],
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
     register_runtime_dir(&runtime_dir);

@@ -204,7 +204,11 @@ fn runtime_base() -> PathBuf {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| PathBuf::from("/var/tmp"));
-        root.join(format!("herdr-pane-graphics-{}", effective_uid()))
+        root.join(format!(
+            "{}-{}",
+            crate::product::PANE_GRAPHICS_PREFIX,
+            effective_uid()
+        ))
     }
     #[cfg(not(unix))]
     {

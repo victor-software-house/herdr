@@ -472,6 +472,7 @@ async fn run_status_command(
     }
 
     let mut process = crate::platform::detached_custom_command_process(&command);
+    crate::product::scrub_foreign_command_env(&mut process);
     process
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

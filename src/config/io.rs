@@ -20,11 +20,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
 ];
 
 pub fn app_dir_name() -> &'static str {
-    if cfg!(debug_assertions) {
-        "herdr-dev"
-    } else {
-        "herdr"
-    }
+    crate::product::app_dir_name()
 }
 
 pub fn config_dir() -> PathBuf {
@@ -239,7 +235,10 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         ""
     };
 
-    Some(format!("{target}{impact}; herdr config check"))
+    Some(format!(
+        "{target}{impact}; {} config check",
+        crate::product::BINARY_NAME
+    ))
 }
 
 pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {
@@ -788,7 +787,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; herdl config check")
         );
     }
 
@@ -801,7 +800,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml has unknown keys; herdr config check")
+            Some("config.toml has unknown keys; herdl config check")
         );
     }
 
@@ -814,7 +813,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; herdl config check")
         );
     }
 
@@ -827,7 +826,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml invalid; using defaults; herdr config check")
+            Some("config.toml invalid; using defaults; herdl config check")
         );
     }
 
@@ -836,14 +835,14 @@ mod tests {
         let startup = vec!["config read error: permission denied; using defaults".to_string()];
         assert_eq!(
             config_diagnostic_summary(&startup).as_deref(),
-            Some("config.toml unreadable; using defaults; herdr config check")
+            Some("config.toml unreadable; using defaults; herdl config check")
         );
 
         let reload =
             vec!["config read error: permission denied; keeping current config".to_string()];
         assert_eq!(
             config_diagnostic_summary(&reload).as_deref(),
-            Some("config.toml unreadable; keeping current config; herdr config check")
+            Some("config.toml unreadable; keeping current config; herdl config check")
         );
     }
 
@@ -856,7 +855,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml invalid; keeping current config; herdr config check")
+            Some("config.toml invalid; keeping current config; herdl config check")
         );
     }
 

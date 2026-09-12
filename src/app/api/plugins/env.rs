@@ -17,13 +17,16 @@ pub(super) fn plugin_path_env(plugin: &InstalledPluginInfo) -> Vec<(String, Stri
     let state_dir = plugin_state_dir(&plugin.plugin_id);
 
     vec![
-        ("HERDR_PLUGIN_ROOT".to_string(), plugin.plugin_root.clone()),
         (
-            "HERDR_PLUGIN_CONFIG_DIR".to_string(),
+            crate::product::PLUGIN_ROOT_ENV_VAR.to_string(),
+            plugin.plugin_root.clone(),
+        ),
+        (
+            crate::product::PLUGIN_CONFIG_DIR_ENV_VAR.to_string(),
             config_dir.display().to_string(),
         ),
         (
-            "HERDR_PLUGIN_STATE_DIR".to_string(),
+            crate::product::PLUGIN_STATE_DIR_ENV_VAR.to_string(),
             state_dir.display().to_string(),
         ),
     ]

@@ -1339,7 +1339,7 @@ fn resolve_ctrl_oem_char(key: WindowsKeyRecord) -> Option<char> {
 
 #[cfg(any(windows, test))]
 fn windows_input_trace_enabled() -> bool {
-    std::env::var_os("HERDR_WINDOWS_INPUT_TRACE").is_some()
+    std::env::var_os("HERDL_WINDOWS_INPUT_TRACE").is_some()
 }
 
 #[cfg(test)]

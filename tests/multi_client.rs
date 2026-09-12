@@ -151,6 +151,8 @@ fn cleanup(server: SpawnedHerdr, base: PathBuf) {
 
 fn api_request(socket: &Path, request: &str) -> Value {
     let mut stream = UnixStream::connect(socket).unwrap();
+    let mut request: Value = serde_json::from_str(request).unwrap();
+    request["product"] = serde_json::json!("herdl");
     writeln!(stream, "{request}").unwrap();
     let mut response = String::new();
     BufReader::new(stream).read_line(&mut response).unwrap();
@@ -160,7 +162,9 @@ fn api_request(socket: &Path, request: &str) -> Value {
 fn create_pane(socket: &Path, label: &str) -> String {
     let result = api_request(
         socket,
-        &format!(r#"{{"id":"create","method":"workspace.create","params":{{"label":"{label}"}}}}"#),
+        &format!(
+            r#"{{"product":"herdl","id":"create","method":"workspace.create","params":{{"label":"{label}"}}}}"#
+        ),
     );
     assert!(
         result.get("error").is_none(),
@@ -179,7 +183,7 @@ fn pane_input(socket: &Path, pane: &str, text: &str) {
     let result = api_request(
         socket,
         &format!(
-            r#"{{"id":"input","method":"pane.send_input","params":{{"pane_id":"{pane}","text":"{escaped}","keys":["Enter"]}}}}"#
+            r#"{{"product":"herdl","id":"input","method":"pane.send_input","params":{{"pane_id":"{pane}","text":"{escaped}","keys":["Enter"]}}}}"#
         ),
     );
     assert!(
@@ -192,7 +196,7 @@ fn pane_text(socket: &Path, pane: &str) -> String {
     let result = api_request(
         socket,
         &format!(
-            r#"{{"id":"read","method":"pane.read","params":{{"pane_id":"{pane}","source":"recent","lines":200}}}}"#
+            r#"{{"product":"herdl","id":"read","method":"pane.read","params":{{"pane_id":"{pane}","source":"recent","lines":200}}}}"#
         ),
     );
     result
@@ -363,7 +367,10 @@ fn crashed_client_shell_does_not_affect_survivor() {
         libc::kill(pid as libc::pid_t, libc::SIGKILL);
     }
     drop(crashed);
-    let response = api_request(&api, r#"{"id":"ping","method":"ping","params":{}}"#);
+    let response = api_request(
+        &api,
+        r#"{"product":"herdl","id":"ping","method":"ping","params":{}}"#,
+    );
     assert!(response.to_string().contains("pong"));
     pane_input(&api, &create_pane(&api, "survivor"), "printf 'survivor\\n'");
     assert!(wait_for_message_variant(
@@ -393,7 +400,10 @@ fn rapid_client_shell_connect_disconnect_remains_healthy() {
     }
     let final_client = shell(&clients, 100, 30);
     drop(final_client);
-    let response = api_request(&api, r#"{"id":"ping","method":"ping","params":{}}"#);
+    let response = api_request(
+        &api,
+        r#"{"product":"herdl","id":"ping","method":"ping","params":{}}"#,
+    );
     assert!(response.to_string().contains("pong"));
     cleanup(server, base);
 }

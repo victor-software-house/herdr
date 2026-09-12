@@ -1212,7 +1212,7 @@ fn agent_wait_tolerates_detection_uncertainty_and_pane_target_rename() {
     let cleared = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_wait_uncertain","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"custom:uncertain"}}}}"#,
+            r#"{{"product":"herdl","id":"agent_wait_uncertain","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"custom:uncertain"}}}}"#,
             pane_id
         ),
     );

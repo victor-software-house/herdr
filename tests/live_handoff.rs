@@ -226,8 +226,9 @@ fn spawn_server_with_args_and_socket_env(
 
 fn try_request(
     socket_path: &Path,
-    request: serde_json::Value,
+    mut request: serde_json::Value,
 ) -> Result<serde_json::Value, RequestError> {
+    request["product"] = serde_json::json!("herdl");
     let mut stream = UnixStream::connect(socket_path).map_err(|err| RequestError {
         retryable: true,
         message: format!("connect {}: {err}", socket_path.display()),
@@ -289,7 +290,7 @@ fn wait_for_api(socket_path: &Path, timeout: Duration) {
     while Instant::now() < deadline {
         match try_request(
             socket_path,
-            serde_json::json!({"id":"test:ping","method":"ping","params":{}}),
+            serde_json::json!({"product":"herdl","id":"test:ping","method":"ping","params":{}}),
         ) {
             Ok(response) if response.get("result").is_some() => return,
             Ok(response) => panic!("api ping returned non-success response: {response}"),
@@ -336,7 +337,7 @@ fn link_plugin(socket_path: &Path, root: &Path) {
 fn listed_plugin_ids(socket_path: &Path) -> Vec<String> {
     let response = request(
         socket_path,
-        serde_json::json!({"id":"test:plugin:list","method":"plugin.list","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:plugin:list","method":"plugin.list","params":{}}),
     );
     assert_ok(response.clone());
     response["result"]["plugins"]
@@ -597,7 +598,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     let replacement_pid =
         wait_for_replacement_server_pid(&runtime_dir, server_pid, Duration::from_secs(10));
@@ -606,7 +607,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     drop(spawned);
     cleanup_test_base(&base);
@@ -641,7 +642,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     let replacement_pid =
         wait_for_replacement_server_pid(&runtime_dir, old_pid, Duration::from_secs(10));
@@ -665,7 +666,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
     loop {
         let panes = request(
             &api_socket,
-            serde_json::json!({"id":"test:panes","method":"pane.list","params":{}}),
+            serde_json::json!({"product":"herdl","id":"test:panes","method":"pane.list","params":{}}),
         );
         if panes["result"]["panes"]
             .as_array()
@@ -679,7 +680,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     ));
     let deadline = Instant::now() + Duration::from_secs(5);
     while Path::new(&format!("/proc/{replacement_pid}")).exists() {
@@ -718,7 +719,7 @@ fn live_handoff_preserves_named_session_socket_paths() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -730,7 +731,7 @@ fn live_handoff_preserves_named_session_socket_paths() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -763,7 +764,7 @@ fn live_handoff_ignores_leaked_default_socket_env_for_named_session() {
 
     assert_ok(request(
         &work_api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(work_spawned);
     wait_for_api(&default_api_socket, Duration::from_secs(10));
@@ -772,11 +773,11 @@ fn live_handoff_ignores_leaked_default_socket_env_for_named_session() {
 
     let _ = request(
         &work_api_socket,
-        serde_json::json!({"id":"test:stop-work","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop-work","method":"server.stop","params":{}}),
     );
     let _ = request(
         &default_api_socket,
-        serde_json::json!({"id":"test:stop-default","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop-default","method":"server.stop","params":{}}),
     );
     drop(default_spawned);
     cleanup_test_base(&base);
@@ -804,7 +805,7 @@ fn live_handoff_preserves_client_socket_env_without_api_socket_env() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -812,7 +813,7 @@ fn live_handoff_preserves_client_socket_env_without_api_socket_env() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -842,7 +843,7 @@ fn live_handoff_preserves_installed_plugins() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -859,7 +860,7 @@ fn live_handoff_preserves_installed_plugins() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -983,7 +984,7 @@ fn live_handoff_preserves_pane_process_io() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     assert!(
         wait_for_message_variant(
@@ -1057,7 +1058,7 @@ fn live_handoff_preserves_pane_process_io() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     let _ = client_socket;
     cleanup_test_base(&base);
@@ -1127,7 +1128,7 @@ pathlib.Path({received:?}).write_text(data.hex())
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -1154,7 +1155,7 @@ pathlib.Path({received:?}).write_text(data.hex())
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -1223,7 +1224,7 @@ pathlib.Path({received:?}).write_text(data.hex())
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -1254,7 +1255,7 @@ pathlib.Path({received:?}).write_text(data.hex())
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -1300,7 +1301,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -1320,7 +1321,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
     ));
     let agents = request(
         &api_socket,
-        serde_json::json!({"id":"test:agent-list","method":"agent.list","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:agent-list","method":"agent.list","params":{}}),
     );
     let found = agents["result"]["agents"]
         .as_array()
@@ -1337,7 +1338,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -1450,7 +1451,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -1492,7 +1493,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -1564,7 +1565,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -1583,7 +1584,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -1632,7 +1633,7 @@ fn live_handoff_keeps_shell_pane_after_foreground_process_exits() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -1650,7 +1651,7 @@ fn live_handoff_keeps_shell_pane_after_foreground_process_exits() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     cleanup_test_base(&base);
 }
@@ -1709,7 +1710,7 @@ fn live_handoff_preserves_python_http_server() {
 
     assert_ok(request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
@@ -1721,7 +1722,7 @@ fn live_handoff_preserves_python_http_server() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     let _ = client_socket;
     cleanup_test_base(&base);
@@ -1795,7 +1796,7 @@ fn live_handoff_preserves_http_servers_across_multiple_sessions() {
     for (_session_name, api_socket) in &sessions {
         assert_ok(request(
             api_socket,
-            serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+            serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
         ));
     }
     drop(spawned);
@@ -1814,7 +1815,7 @@ fn live_handoff_preserves_http_servers_across_multiple_sessions() {
     for (_session_name, api_socket) in &sessions {
         let _ = request(
             api_socket,
-            serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+            serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
         );
     }
     cleanup_test_base(&base);
@@ -1895,7 +1896,7 @@ fn live_handoff_bad_expected_protocol_rolls_back_old_server() {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     drop(spawned);
     cleanup_test_base(&base);
@@ -1951,7 +1952,7 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
 
     let failed = request(
         &api_socket,
-        serde_json::json!({"id":"test:handoff-fail","method":"server.live_handoff","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:handoff-fail","method":"server.live_handoff","params":{}}),
     );
     assert!(
         failed.get("error").is_some(),
@@ -1977,7 +1978,7 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
 
     let _ = request(
         &api_socket,
-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     drop(spawned);
     cleanup_test_base(&base);

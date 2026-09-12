@@ -175,7 +175,45 @@ fn handle_connection_with_stop(
         return Ok(());
     }
 
-    let request = match serde_json::from_str::<Request>(line) {
+    let request_value = match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(value) => value,
+        Err(request_error) => {
+            write_json_line_allow_disconnect(
+                &mut stream,
+                &ErrorResponse {
+                    id: String::new(),
+                    error: ErrorBody {
+                        code: "invalid_request".into(),
+                        message: format!("invalid request: {request_error}"),
+                    },
+                },
+            )?;
+            return Ok(());
+        }
+    };
+    if request_value
+        .get("product")
+        .and_then(serde_json::Value::as_str)
+        != Some(crate::product::ID)
+    {
+        let id = request_value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        write_json_line_allow_disconnect(
+            &mut stream,
+            &ErrorResponse {
+                id,
+                error: ErrorBody {
+                    code: "wrong_product".into(),
+                    message: "API request belongs to a different product".into(),
+                },
+            },
+        )?;
+        return Ok(());
+    }
+    let request = match serde_json::from_value::<Request>(request_value) {
         Ok(request) => request,
         Err(request_error) => {
             write_json_line_allow_disconnect(
@@ -617,7 +655,7 @@ mod windows_tests {
         );
 
         client
-            .write_all(br#"{"id":"delayed","method":"ping","params":{}}"#)
+            .write_all(br#"{"product":"herdl","id":"delayed","method":"ping","params":{}}"#)
             .unwrap();
         client.flush().unwrap();
         std::thread::sleep(Duration::from_millis(150));
@@ -1134,6 +1172,26 @@ mod tests {
     }
 
     #[test]
+    fn api_connection_rejects_missing_or_official_product_identity() {
+        for request in [
+            r#"{"id":"missing","method":"ping","params":{}}"#,
+            r#"{"product":"herdr","id":"official","method":"ping","params":{}}"#,
+        ] {
+            let (mut client, server, path) = local_stream_pair("wrong-product");
+            let (api_tx, _api_rx) = mpsc::unbounded_channel();
+            let running = Arc::new(AtomicBool::new(true));
+            let server_thread = std::thread::spawn(move || {
+                handle_connection(server, &api_tx, &EventHub::default(), &running, None)
+            });
+            write_text_line(&mut client, request).unwrap();
+            let response: ErrorResponse = serde_json::from_str(&read_line(&mut client)).unwrap();
+            assert_eq!(response.error.code, "wrong_product");
+            server_thread.join().unwrap().unwrap();
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
     fn ping_request_returns_pong() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let response = handle_request(
@@ -1229,7 +1287,9 @@ mod tests {
         let (api_tx, mut api_rx) = mpsc::unbounded_channel();
         let (mut client, server, _path) = local_stream_pair("write-ack");
         client
-            .write_all(br#"{"id":"req_write","method":"workspace.list","params":{}}"#)
+            .write_all(
+                br#"{"product":"herdl","id":"req_write","method":"workspace.list","params":{}}"#,
+            )
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();
@@ -1270,7 +1330,7 @@ mod tests {
 
         let (mut client, server, _path) = local_stream_pair("api-events-wait-initial");
         client
-            .write_all(br#"{"id":"wait_1","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":1000}}"#)
+            .write_all(br#"{"product":"herdl","id":"wait_1","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":1000}}"#)
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();
@@ -1297,7 +1357,7 @@ mod tests {
 
         let (mut client, server, _path) = local_stream_pair("api-events-wait-timeout");
         client
-            .write_all(br#"{"id":"wait_2","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":30}}"#)
+            .write_all(br#"{"product":"herdl","id":"wait_2","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":30}}"#)
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();
@@ -1359,7 +1419,7 @@ mod tests {
 
         let (mut client, server, _path) = local_stream_pair("wait-close");
         client
-            .write_all(br#"{"id":"wait_close","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"done"},"timeout_ms":500}}"#)
+            .write_all(br#"{"product":"herdl","id":"wait_close","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"done"},"timeout_ms":500}}"#)
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();
@@ -1412,7 +1472,7 @@ mod tests {
 
         let (mut client, server, _path) = local_stream_pair("api-wait-disconnect");
         client
-            .write_all(br#"{"id":"req_wait","method":"pane.wait_for_output","params":{"pane_id":"pane_1","source":"recent","match":{"type":"substring","value":"never"}}}"#)
+            .write_all(br#"{"product":"herdl","id":"req_wait","method":"pane.wait_for_output","params":{"pane_id":"pane_1","source":"recent","match":{"type":"substring","value":"never"}}}"#)
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();
@@ -1443,7 +1503,7 @@ mod tests {
         let (mut client, server, _path) = local_stream_pair("api-sub-disconnect");
         client
             .write_all(
-                br#"{"id":"sub_1","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
+                br#"{"product":"herdl","id":"sub_1","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
             )
             .unwrap();
         client.write_all(b"\n").unwrap();
@@ -1475,7 +1535,7 @@ mod tests {
         let (mut client, server, _path) = local_stream_pair("api-sub-shutdown");
         client
             .write_all(
-                br#"{"id":"sub_2","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
+                br#"{"product":"herdl","id":"sub_2","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
             )
             .unwrap();
         client.write_all(b"\n").unwrap();
@@ -1532,7 +1592,7 @@ mod pane_graphics_request_tests {
 
     #[test]
     fn duplicate_method_cannot_be_reinterpreted_as_graphics_stream() {
-        let encoded = r#"{"id":"duplicate","method":"ping","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#;
+        let encoded = r#"{"product":"herdl","id":"duplicate","method":"ping","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#;
 
         assert!(serde_json::from_str::<Request>(encoded).is_err());
     }

@@ -179,6 +179,7 @@ fn spawn_client_process(
 fn send_json_request(socket_path: &Path, id: &str, method: &str, params: Value) -> Value {
     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
     let request = json!({
+        "product": "herdl",
         "id": id,
         "method": method,
         "params": params

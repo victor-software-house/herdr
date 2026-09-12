@@ -204,7 +204,7 @@ fn spawn_server_with_config(
 fn ping_socket(socket_path: &PathBuf) -> String {
     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
 
-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
+    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
     writeln!(stream, "{}", request).unwrap();
 
     let mut reader = BufReader::new(stream);
@@ -215,6 +215,8 @@ fn ping_socket(socket_path: &PathBuf) -> String {
 
 fn send_json_request(socket_path: &PathBuf, request: &str) -> Value {
     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+    let mut request: Value = serde_json::from_str(request).unwrap();
+    request["product"] = serde_json::json!("herdl");
     writeln!(stream, "{}", request).unwrap();
 
     let mut reader = BufReader::new(stream);
@@ -227,7 +229,7 @@ fn first_pane_id_in_workspace(socket_path: &PathBuf, workspace_id: &str) -> Stri
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         let request = format!(
-            r#"{{"id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
+            r#"{{"product":"herdl","id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
         );
         let panes = send_json_request(socket_path, &request);
         if let Some(pane_id) = panes["result"]["panes"]
@@ -818,7 +820,7 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
         }
         let _ = send_json_request(
             &api_socket,
-            r#"{"id":"stop","method":"server.stop","params":{}}"#,
+            r#"{"product":"herdl","id":"stop","method":"server.stop","params":{}}"#,
         );
         cleanup_test_base(&base);
     }
@@ -1641,7 +1643,7 @@ fn pane_spawn_cwd_fallback_in_server() {
 
     let workspaces = send_json_request(
         &api_socket,
-        r#"{"id":"workspace_list","method":"workspace.list","params":{}}"#,
+        r#"{"product":"herdl","id":"workspace_list","method":"workspace.list","params":{}}"#,
     );
     let restored_workspace = workspaces["result"]["workspaces"]
         .as_array()
@@ -1655,7 +1657,9 @@ fn pane_spawn_cwd_fallback_in_server() {
     let pane_id = first_pane_id_in_workspace(&api_socket, workspace_id);
     let pane = send_json_request(
         &api_socket,
-        &format!(r#"{{"id":"pane_get","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#),
+        &format!(
+            r#"{{"product":"herdl","id":"pane_get","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#
+        ),
     );
     assert_eq!(pane["result"]["pane"]["workspace_id"], workspace_id);
     let cwd = pane["result"]["pane"]["cwd"]
@@ -1807,7 +1811,7 @@ fn client_receives_notify_on_agent_state_change() {
 
     // Create a workspace via the API.
     let mut ws_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let request = r#"{"id":"1","method":"workspace.create","params":{}}"#;
+    let request = r#"{"product":"herdl","id":"1","method":"workspace.create","params":{}}"#;
     writeln!(ws_stream, "{}", request).unwrap();
     let mut reader = BufReader::new(ws_stream);
     let mut ws_response = String::new();
@@ -1822,8 +1826,9 @@ fn client_receives_notify_on_agent_state_change() {
 
     // Get pane list to find a pane ID.
     let mut pane_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let pane_request =
-        format!(r#"{{"id":"2","method":"pane.list","params":{{"workspace_id":"{ws_id}"}}}}"#);
+    let pane_request = format!(
+        r#"{{"product":"herdl","id":"2","method":"pane.list","params":{{"workspace_id":"{ws_id}"}}}}"#
+    );
     writeln!(pane_stream, "{}", pane_request).unwrap();
     let mut pane_reader = BufReader::new(pane_stream);
     let mut pane_response = String::new();
@@ -1840,7 +1845,7 @@ fn client_receives_notify_on_agent_state_change() {
     // ServerMessage::Notify with kind=Sound (Request sound).
     let mut report_stream = UnixStream::connect(&api_socket).expect("connect to API");
     let report_request = format!(
-        r#"{{"id":"3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"blocked","source":"test"}}}}"#
+        r#"{{"product":"herdl","id":"3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"blocked","source":"test"}}}}"#
     );
     writeln!(report_stream, "{}", report_request).unwrap();
     let mut report_reader = BufReader::new(report_stream);
@@ -1877,7 +1882,7 @@ fn client_receives_notify_on_agent_state_change() {
     // if the pane is in a background workspace.
     // First, create a second workspace to make the first one "background".
     let mut ws2_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let ws2_request = r#"{"id":"4","method":"workspace.create","params":{}}"#;
+    let ws2_request = r#"{"product":"herdl","id":"4","method":"workspace.create","params":{}}"#;
     writeln!(ws2_stream, "{}", ws2_request).unwrap();
     let mut ws2_reader = BufReader::new(ws2_stream);
     let mut ws2_response = String::new();
@@ -1891,7 +1896,7 @@ fn client_receives_notify_on_agent_state_change() {
         .to_string();
     let mut focus_stream = UnixStream::connect(&api_socket).expect("connect to API");
     let focus_request = format!(
-        r#"{{"id":"5","method":"workspace.focus","params":{{"workspace_id":"{ws2_id}"}}}}"#
+        r#"{{"product":"herdl","id":"5","method":"workspace.focus","params":{{"workspace_id":"{ws2_id}"}}}}"#
     );
     writeln!(focus_stream, "{}", focus_request).unwrap();
     let mut focus_reader = BufReader::new(focus_stream);
@@ -1909,7 +1914,7 @@ fn client_receives_notify_on_agent_state_change() {
     // background workspace should trigger a Done sound notification.
     let mut work_stream = UnixStream::connect(&api_socket).expect("connect to API");
     let work_request = format!(
-        r#"{{"id":"6","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"working","source":"test"}}}}"#
+        r#"{{"product":"herdl","id":"6","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"working","source":"test"}}}}"#
     );
     writeln!(work_stream, "{}", work_request).unwrap();
     let mut work_reader = BufReader::new(work_stream);
@@ -1925,7 +1930,7 @@ fn client_receives_notify_on_agent_state_change() {
 
     let mut idle_stream = UnixStream::connect(&api_socket).expect("connect to API");
     let idle_request = format!(
-        r#"{{"id":"7","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"idle","source":"test"}}}}"#
+        r#"{{"product":"herdl","id":"7","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"idle","source":"test"}}}}"#
     );
     writeln!(idle_stream, "{}", idle_request).unwrap();
     let mut idle_reader = BufReader::new(idle_stream);

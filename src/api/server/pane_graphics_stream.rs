@@ -721,7 +721,7 @@ mod tests {
         let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
         let (mut client, server, _path) = local_stream_pair("api-pane-graphics-stream");
         client
-            .write_all(br#"{"id":"stream_1","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
+            .write_all(br#"{"product":"herdl","id":"stream_1","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();
@@ -786,7 +786,7 @@ mod tests {
         let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
         let (mut client, server, _path) = local_stream_pair("api-pane-graphics-stream-error");
         client
-            .write_all(br#"{"id":"stream_2","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
+            .write_all(br#"{"product":"herdl","id":"stream_2","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();
@@ -883,7 +883,7 @@ mod tests {
         let (mut client, server, _path) =
             local_stream_pair("api-pane-graphics-stream-ack-disconnect");
         client
-            .write_all(br#"{"id":"stream_3","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
+            .write_all(br#"{"product":"herdl","id":"stream_3","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
             .unwrap();
         client.write_all(b"\n").unwrap();
         client.flush().unwrap();

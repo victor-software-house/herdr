@@ -2107,6 +2107,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
     #[test]
+    fn reload_config_reloads_parent_changes_and_keeps_state_when_parent_breaks() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-inherited");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let parent = path.parent().unwrap().join("base.toml");
+        std::fs::write(
+            &parent,
+            "[server]\nheadless_cols = 160\nheadless_rows = 50\n",
+        )
+        .unwrap();
+        std::fs::write(&path, "extends = \"base.toml\"\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert_eq!(app.state.headless_size, (160, 50));
+
+        std::fs::write(
+            &parent,
+            "[server]\nheadless_cols = 170\nheadless_rows = 60\n",
+        )
+        .unwrap();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert_eq!(app.state.headless_size, (170, 60));
+
+        std::fs::write(&parent, "[server\n").unwrap();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Failed);
+        assert_eq!(app.state.headless_size, (170, 60));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains(&parent.display().to_string())));
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+    #[test]
     fn read_only_api_requests_do_not_force_rerender() {
         let read_only = crate::api::schema::Request {
             id: "req_1".into(),

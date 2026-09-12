@@ -18,6 +18,26 @@ Windows:          %APPDATA%\herdr\config.toml
 
 Run `herdr --help` to see the resolved config path for your system.
 
+A machine-local config can inherit one parent with a top-level `extends` value:
+
+```toml
+extends = "../shared/herdr.toml"
+
+[ui]
+sidebar_width = 28
+```
+
+Relative parent paths resolve from the file that declares them. `~` and `~/...`
+resolve from your home directory. Each parent may extend one more parent, up to
+16 files in the complete chain. Missing files, invalid TOML, unsupported
+`~user` paths, cycles, and deeper chains reject the complete load with a
+source-file diagnostic.
+
+Herdr merges the oldest parent first and the selected config last. TOML tables
+merge recursively. A child scalar, array, array of tables, or value of another
+type replaces the parent value. The `extends` key controls loading only; it is
+not part of the effective runtime config.
+
 Print the full default config:
 
 ```bash
@@ -47,6 +67,14 @@ herdr server reload-config
 ```
 
 You can also open the global menu in Herdr and choose `reload config`.
+
+Reload reads the complete inheritance chain again. A broken parent keeps the
+current running config, just like an invalid selected config. Settings screens,
+`config set-channel`, onboarding, and `config reset-keys` write only the
+selected child file. They never modify a parent or copy inherited values into
+the child. Removing a child override therefore reveals the inherited value on
+the next reload. `config reset-keys` cannot remove keybindings declared by a
+parent; override them in the child or edit that parent directly.
 
 Reload applies most UI settings without restarting panes. Startup-only settings still need a restart.
 

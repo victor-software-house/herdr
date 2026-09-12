@@ -1,0 +1,2770 @@
+herdl-connection-identity
+
+From: Victor Araújo <victor@victor-software-house.com>
+
+Downstream-Reason: Make HerDL client, daemon, endpoint, API, handoff, and remote bridge connections fail closed against official Herdr.
+Upstream-Status: inappropriate: downstream HerDL connection identity
+Drop-When: The HerDL downstream product is retired.
+---
+ src/api/client.rs                      |   10 +
+ src/api/server.rs                      |   80 ++++++++-
+ src/api/server/pane_graphics_stream.rs |    6 -
+ src/client/handshake.rs                |    2 
+ src/protocol/endpoint.rs               |   10 +
+ src/protocol/wire.rs                   |   12 +
+ src/remote.rs                          |    8 -
+ src/remote/attach.rs                   |   18 +-
+ src/server/autodetect.rs               |   38 +++-
+ src/server/client_transport.rs         |   82 ++++++++++
+ src/server/handoff.rs                  |   22 ++-
+ tests/api_ping.rs                      |  274 ++++++++++++++++----------------
+ tests/auto_detect.rs                   |    6 -
+ tests/cli/agent_options.rs             |    2 
+ tests/cli/agent_wait.rs                |   12 +
+ tests/cli/agents.rs                    |    2 
+ tests/cli/panes.rs                     |    6 -
+ tests/cli/sessions.rs                  |   12 +
+ tests/client_mode.rs                   |   31 ++--
+ tests/cross_area.rs                    |    1 
+ tests/detach_reattach.rs               |   20 +-
+ tests/live_handoff.rs                  |   79 +++++----
+ tests/multi_client.rs                  |   20 ++
+ tests/server_headless.rs               |    2 
+ tests/support/mod.rs                   |   11 +
+ 25 files changed, 496 insertions(+), 270 deletions(-)
+
+diff --git a/src/api/client.rs b/src/api/client.rs
+index ec8a3d20..0898c7b4 100644
+--- a/src/api/client.rs
++++ b/src/api/client.rs
+@@ -156,7 +156,15 @@ impl From<serde_json::Error> for ApiClientError {
+ }
+ 
+ fn write_request(stream: &mut LocalStream, request: &Request) -> Result<(), ApiClientError> {
+-    stream.write_all(serde_json::to_string(request)?.as_bytes())?;
++    let mut value = serde_json::to_value(request)?;
++    let object = value.as_object_mut().ok_or_else(|| {
++        ApiClientError::Json(serde_json::Error::io(io::Error::new(
++            io::ErrorKind::InvalidData,
++            "API request did not serialize as an object",
++        )))
++    })?;
++    object.insert("product".into(), crate::product::ID.into());
++    stream.write_all(serde_json::to_string(&value)?.as_bytes())?;
+     stream.write_all(b"\n")?;
+     stream.flush()?;
+     Ok(())
+diff --git a/src/api/server.rs b/src/api/server.rs
+index 22e15b73..5517dc7d 100644
+--- a/src/api/server.rs
++++ b/src/api/server.rs
+@@ -175,7 +175,45 @@ fn handle_connection_with_stop(
+         return Ok(());
+     }
+ 
+-    let request = match serde_json::from_str::<Request>(line) {
++    let request_value = match serde_json::from_str::<serde_json::Value>(line) {
++        Ok(value) => value,
++        Err(request_error) => {
++            write_json_line_allow_disconnect(
++                &mut stream,
++                &ErrorResponse {
++                    id: String::new(),
++                    error: ErrorBody {
++                        code: "invalid_request".into(),
++                        message: format!("invalid request: {request_error}"),
++                    },
++                },
++            )?;
++            return Ok(());
++        }
++    };
++    if request_value
++        .get("product")
++        .and_then(serde_json::Value::as_str)
++        != Some(crate::product::ID)
++    {
++        let id = request_value
++            .get("id")
++            .and_then(serde_json::Value::as_str)
++            .unwrap_or_default()
++            .to_owned();
++        write_json_line_allow_disconnect(
++            &mut stream,
++            &ErrorResponse {
++                id,
++                error: ErrorBody {
++                    code: "wrong_product".into(),
++                    message: "API request belongs to a different product".into(),
++                },
++            },
++        )?;
++        return Ok(());
++    }
++    let request = match serde_json::from_value::<Request>(request_value) {
+         Ok(request) => request,
+         Err(request_error) => {
+             write_json_line_allow_disconnect(
+@@ -617,7 +655,7 @@ mod windows_tests {
+         );
+ 
+         client
+-            .write_all(br#"{"id":"delayed","method":"ping","params":{}}"#)
++            .write_all(br#"{"product":"herdl","id":"delayed","method":"ping","params":{}}"#)
+             .unwrap();
+         client.flush().unwrap();
+         std::thread::sleep(Duration::from_millis(150));
+@@ -1133,6 +1171,26 @@ mod tests {
+         assert_eq!(api_response_outcome(generic_error), "error");
+     }
+ 
++    #[test]
++    fn api_connection_rejects_missing_or_official_product_identity() {
++        for request in [
++            r#"{"id":"missing","method":"ping","params":{}}"#,
++            r#"{"product":"herdr","id":"official","method":"ping","params":{}}"#,
++        ] {
++            let (mut client, server, path) = local_stream_pair("wrong-product");
++            let (api_tx, _api_rx) = mpsc::unbounded_channel();
++            let running = Arc::new(AtomicBool::new(true));
++            let server_thread = std::thread::spawn(move || {
++                handle_connection(server, &api_tx, &EventHub::default(), &running, None)
++            });
++            write_text_line(&mut client, request).unwrap();
++            let response: ErrorResponse = serde_json::from_str(&read_line(&mut client)).unwrap();
++            assert_eq!(response.error.code, "wrong_product");
++            server_thread.join().unwrap().unwrap();
++            let _ = std::fs::remove_file(path);
++        }
++    }
++
+     #[test]
+     fn ping_request_returns_pong() {
+         let (tx, _rx) = mpsc::unbounded_channel();
+@@ -1229,7 +1287,9 @@ mod tests {
+         let (api_tx, mut api_rx) = mpsc::unbounded_channel();
+         let (mut client, server, _path) = local_stream_pair("write-ack");
+         client
+-            .write_all(br#"{"id":"req_write","method":"workspace.list","params":{}}"#)
++            .write_all(
++                br#"{"product":"herdl","id":"req_write","method":"workspace.list","params":{}}"#,
++            )
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+@@ -1270,7 +1330,7 @@ mod tests {
+ 
+         let (mut client, server, _path) = local_stream_pair("api-events-wait-initial");
+         client
+-            .write_all(br#"{"id":"wait_1","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":1000}}"#)
++            .write_all(br#"{"product":"herdl","id":"wait_1","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":1000}}"#)
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+@@ -1297,7 +1357,7 @@ mod tests {
+ 
+         let (mut client, server, _path) = local_stream_pair("api-events-wait-timeout");
+         client
+-            .write_all(br#"{"id":"wait_2","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":30}}"#)
++            .write_all(br#"{"product":"herdl","id":"wait_2","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"blocked"},"timeout_ms":30}}"#)
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+@@ -1359,7 +1419,7 @@ mod tests {
+ 
+         let (mut client, server, _path) = local_stream_pair("wait-close");
+         client
+-            .write_all(br#"{"id":"wait_close","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"done"},"timeout_ms":500}}"#)
++            .write_all(br#"{"product":"herdl","id":"wait_close","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"pane_1","agent_status":"done"},"timeout_ms":500}}"#)
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+@@ -1412,7 +1472,7 @@ mod tests {
+ 
+         let (mut client, server, _path) = local_stream_pair("api-wait-disconnect");
+         client
+-            .write_all(br#"{"id":"req_wait","method":"pane.wait_for_output","params":{"pane_id":"pane_1","source":"recent","match":{"type":"substring","value":"never"}}}"#)
++            .write_all(br#"{"product":"herdl","id":"req_wait","method":"pane.wait_for_output","params":{"pane_id":"pane_1","source":"recent","match":{"type":"substring","value":"never"}}}"#)
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+@@ -1443,7 +1503,7 @@ mod tests {
+         let (mut client, server, _path) = local_stream_pair("api-sub-disconnect");
+         client
+             .write_all(
+-                br#"{"id":"sub_1","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
++                br#"{"product":"herdl","id":"sub_1","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
+             )
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+@@ -1475,7 +1535,7 @@ mod tests {
+         let (mut client, server, _path) = local_stream_pair("api-sub-shutdown");
+         client
+             .write_all(
+-                br#"{"id":"sub_2","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
++                br#"{"product":"herdl","id":"sub_2","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"}]}}"#,
+             )
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+@@ -1532,7 +1592,7 @@ mod pane_graphics_request_tests {
+ 
+     #[test]
+     fn duplicate_method_cannot_be_reinterpreted_as_graphics_stream() {
+-        let encoded = r#"{"id":"duplicate","method":"ping","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#;
++        let encoded = r#"{"product":"herdl","id":"duplicate","method":"ping","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#;
+ 
+         assert!(serde_json::from_str::<Request>(encoded).is_err());
+     }
+diff --git a/src/api/server/pane_graphics_stream.rs b/src/api/server/pane_graphics_stream.rs
+index c0dac5ab..0bb545e0 100644
+--- a/src/api/server/pane_graphics_stream.rs
++++ b/src/api/server/pane_graphics_stream.rs
+@@ -721,7 +721,7 @@ mod tests {
+         let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+         let (mut client, server, _path) = local_stream_pair("api-pane-graphics-stream");
+         client
+-            .write_all(br#"{"id":"stream_1","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
++            .write_all(br#"{"product":"herdl","id":"stream_1","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+@@ -786,7 +786,7 @@ mod tests {
+         let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+         let (mut client, server, _path) = local_stream_pair("api-pane-graphics-stream-error");
+         client
+-            .write_all(br#"{"id":"stream_2","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
++            .write_all(br#"{"product":"herdl","id":"stream_2","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+@@ -883,7 +883,7 @@ mod tests {
+         let (mut client, server, _path) =
+             local_stream_pair("api-pane-graphics-stream-ack-disconnect");
+         client
+-            .write_all(br#"{"id":"stream_3","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
++            .write_all(br#"{"product":"herdl","id":"stream_3","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#)
+             .unwrap();
+         client.write_all(b"\n").unwrap();
+         client.flush().unwrap();
+diff --git a/src/client/handshake.rs b/src/client/handshake.rs
+index 937f92ac..b7ec0d72 100644
+--- a/src/client/handshake.rs
++++ b/src/client/handshake.rs
+@@ -25,7 +25,7 @@ use super::{shell, ClientError};
+ /// Time to wait for the server's Welcome reply during the handshake.
+ ///
+ /// A local client talks to an already-connected server, so 5s is plenty. The
+-/// remote bridge client (`herdr --remote`) sits behind a fresh per-attach ssh
++/// remote bridge client (`herdl --remote`) sits behind a fresh per-attach SSH
+ /// connection whose cold-connect (TCP + key exchange + auth) happens inside this
+ /// window; on a high-latency link that easily exceeds 5s, so it gets a far
+ /// larger budget. See issue #753.
+diff --git a/src/protocol/endpoint.rs b/src/protocol/endpoint.rs
+index a70ef568..50e38237 100644
+--- a/src/protocol/endpoint.rs
++++ b/src/protocol/endpoint.rs
+@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
+ use super::{ClientShellSnapshot, ClientSurfaceSize, ServerMessage};
+ 
+ pub const ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
+-pub const ENDPOINT_HELLO_KIND: &str = "endpoint.hello.v1";
+-pub const ENDPOINT_WELCOME_KIND: &str = "endpoint.welcome.v1";
++pub const ENDPOINT_HELLO_KIND: &str = "herdl.endpoint.hello.v1";
++pub const ENDPOINT_WELCOME_KIND: &str = "herdl.endpoint.welcome.v1";
+ pub const SNAPSHOT_CODEC_V1: &str = "shell.snapshot.v1";
+ pub const ENDPOINT_SNAPSHOT_KIND: &str = SNAPSHOT_CODEC_V1;
+ pub const SURFACE_CODEC_V1: &str = "shell.surface.v1";
+@@ -187,6 +187,12 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn herdl_endpoint_handshake_kinds_are_disjoint_from_official_herdr() {
++        assert_ne!(ENDPOINT_HELLO_KIND, "endpoint.hello.v1");
++        assert_ne!(ENDPOINT_WELCOME_KIND, "endpoint.welcome.v1");
++    }
++
+     #[test]
+     fn hello_ignores_future_named_fields() {
+         let mut value = serde_json::to_value(hello()).unwrap();
+diff --git a/src/protocol/wire.rs b/src/protocol/wire.rs
+index 052c73a3..213027e4 100644
+--- a/src/protocol/wire.rs
++++ b/src/protocol/wire.rs
+@@ -1,4 +1,4 @@
+-//! Wire protocol for herdr server/client communication.
++//! Private wire protocol for HerDL server/client communication.
+ //!
+ //! Defines the message types, framing, version negotiation, and safety
+ //! constraints for the binary protocol over local sockets.
+@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
+ // Protocol constants
+ // ---------------------------------------------------------------------------
+ 
+-/// Current protocol version. Bumped when wire format changes incompatibly.
+-pub const PROTOCOL_VERSION: u32 = 22;
++/// Current HerDL private protocol. The high bytes prevent cross-product handshakes.
++pub const PROTOCOL_VERSION: u32 = 1212435478;
+ 
+ /// Maximum allowed frame payload size (2 MB). Frames larger than this are
+ /// rejected to prevent denial-of-service via oversized length prefixes.
+@@ -3125,6 +3125,12 @@ mod tests {
+ 
+     // ---- Version negotiation ----
+ 
++    #[test]
++    fn herdl_private_protocol_uses_a_disjoint_product_namespace() {
++        assert_ne!(PROTOCOL_VERSION, 22);
++        assert_eq!(PROTOCOL_VERSION & 0xffff_ff00, 0x4844_4c00);
++    }
++
+     #[test]
+     fn version_compatible() {
+         assert_eq!(
+diff --git a/src/remote.rs b/src/remote.rs
+index c1c0f65f..de6cf67b 100644
+--- a/src/remote.rs
++++ b/src/remote.rs
+@@ -18,7 +18,7 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
+                 std::io::Error::new(
+                     error.kind(),
+                     format!(
+-                        "failed to connect to remote Herdr API socket {}: {error}",
++                        "failed to connect to remote HerDL API socket {}: {error}",
+                         path.display()
+                     ),
+                 )
+@@ -26,12 +26,12 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
+             crate::platform::forward_remote_bridge_stdio(stream)
+         }
+         [flag] if flag == "--check" => {
+-            println!("herdr-api-bridge-v1");
++            println!("herdl-api-bridge-v1");
+             Ok(())
+         }
+         _ => Err(std::io::Error::new(
+             std::io::ErrorKind::InvalidInput,
+-            "usage: herdr remote-api-bridge [--check]",
++            "usage: herdl remote-api-bridge [--check]",
+         )),
+     }
+ }
+@@ -53,7 +53,7 @@ pub(crate) fn print_remote_error_hint(err: &std::io::Error, target: &str) {
+             ssh_check_command(target)
+         );
+         eprintln!(
+-            "hint: if your SSH key has a passphrase, load it into ssh-agent with `ssh-add` before running `herdr --remote`."
++            "hint: if your SSH key has a passphrase, load it into ssh-agent with `ssh-add` before running `herdl --remote`."
+         );
+     }
+ }
+diff --git a/src/remote/attach.rs b/src/remote/attach.rs
+index 9795605d..35b618d8 100644
+--- a/src/remote/attach.rs
++++ b/src/remote/attach.rs
+@@ -33,7 +33,7 @@ const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
+ const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
+ const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
+ const REMOTE_BINARY_ENV_VAR: &str = "HERDL_REMOTE_BINARY";
+-const REMOTE_OUTPUT_READY_MARKER: &str = "herdr-remote-output-ready:1";
++const REMOTE_OUTPUT_READY_MARKER: &str = "herdl-remote-output-ready:1";
+ const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
+ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
+     let session_name = crate::session::active_name()
+@@ -1027,7 +1027,7 @@ pub(super) fn find_installed_remote_api_herdr(
+             return Err(command_failed("remote SSH connection failed", &probe));
+         }
+         if probe.status.success()
+-            && String::from_utf8_lossy(&probe.stdout).trim() == "herdr-api-bridge-v1"
++            && String::from_utf8_lossy(&probe.stdout).trim() == "herdl-api-bridge-v1"
+         {
+             return Ok(candidate);
+         }
+@@ -3695,7 +3695,7 @@ mod tests {
+     fn remote_output_framing_discards_any_banner_and_preserves_binary() {
+         let payload = [0, 1, 2, 0xff, b'\n'];
+         let mut input = vec![b'x'; 4 * 1024 * 1024];
+-        input.extend_from_slice(b"\r\nherdr-remote-output-ready:1\r\n");
++        input.extend_from_slice(b"\r\nherdl-remote-output-ready:1\r\n");
+         input.extend_from_slice(&payload);
+         let mut reader = io::BufReader::with_capacity(17, io::Cursor::new(input));
+ 
+@@ -3709,7 +3709,7 @@ mod tests {
+         normalize_remote_stdout(&mut missing, false).unwrap();
+         assert_eq!(missing, b"profile output without marker");
+ 
+-        let mut platform = b"profile output\nherdr-remote-output-ready:1\nLinux\nx86_64\n".to_vec();
++        let mut platform = b"profile output\nherdl-remote-output-ready:1\nLinux\nx86_64\n".to_vec();
+         normalize_remote_stdout(&mut platform, true).unwrap();
+         let platform = String::from_utf8(platform).unwrap();
+         let mut lines = platform.lines();
+@@ -3812,7 +3812,7 @@ mod tests {
+             remote_herdr
+                 .executable
+                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
+-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec \"$HOME/.local/bin/herdl\" remote-client-bridge"
++            "printf '\n%s\n' 'herdl-remote-output-ready:1'\nexec \"$HOME/.local/bin/herdl\" remote-client-bridge"
+         );
+         assert_eq!(
+             remote_herdr.executable.saved_bridge_command("agents"),
+@@ -3833,7 +3833,7 @@ mod tests {
+             remote_herdr
+                 .executable
+                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
+-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec /usr/bin/herdr remote-client-bridge"
++            "printf '\n%s\n' 'herdl-remote-output-ready:1'\nexec /usr/bin/herdr remote-client-bridge"
+         );
+     }
+ 
+@@ -3851,7 +3851,7 @@ mod tests {
+             remote_herdr
+                 .executable
+                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
+-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec '/opt/herdr bin/herdr' remote-client-bridge"
++            "printf '\n%s\n' 'herdl-remote-output-ready:1'\nexec '/opt/herdr bin/herdr' remote-client-bridge"
+         );
+     }
+ 
+@@ -3869,7 +3869,7 @@ mod tests {
+             remote_herdr
+                 .executable
+                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
+-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec /opt/homebrew/bin/herdr remote-client-bridge"
++            "printf '\n%s\n' 'herdl-remote-output-ready:1'\nexec /opt/homebrew/bin/herdr remote-client-bridge"
+         );
+         assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
+     }
+@@ -3963,7 +3963,7 @@ mod tests {
+             remote_herdr
+                 .executable
+                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
+-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
++            "printf '\n%s\n' 'herdl-remote-output-ready:1'\nexec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
+         );
+     }
+ 
+diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
+index e56cba17..fd97a4e3 100644
+--- a/src/server/autodetect.rs
++++ b/src/server/autodetect.rs
+@@ -155,6 +155,18 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
+     let endpoint_generation =
+         capabilities.and_then(|capabilities| capabilities.endpoint_protocol_generation);
+     let surface_interest = capabilities.is_some_and(|capabilities| capabilities.surface_interest);
++    if status.protocol != Some(crate::protocol::PROTOCOL_VERSION) {
++        return Err(io::Error::other(format!(
++            "This socket belongs to a different product or private protocol.\n\nserver: v{} protocol {}\nclient: v{} protocol {}",
++            status.version.as_deref().unwrap_or("unknown"),
++            status
++                .protocol
++                .map(|value| value.to_string())
++                .unwrap_or_else(|| "unavailable".to_string()),
++            crate::build_info::version(),
++            crate::protocol::PROTOCOL_VERSION,
++        )));
++    }
+     if endpoint_generation == Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
+         && (!saved_federation || surface_interest)
+     {
+@@ -564,7 +576,7 @@ test "$sid" = "$$"
+     }
+ 
+     #[test]
+-    fn validate_running_server_compatibility_names_session_commands_for_protocol_mismatch() {
++    fn validate_running_server_compatibility_rejects_official_herdr_protocol() {
+         let _guard = env_lock().lock().unwrap();
+         let dir = unique_test_dir("named-protocol");
+         std::env::set_var("XDG_CONFIG_HOME", &dir);
+@@ -581,11 +593,19 @@ test "$sid" = "$$"
+                 .read_line(&mut request)
+                 .unwrap();
+             assert!(request.contains("ping"));
+-            let body = format!(
+-                "{{\"id\":\"autodetect:server:status\",\"result\":{{\"type\":\"pong\",\"version\":\"0.5.5\",\"protocol\":{}}}}}\n",
+-                crate::protocol::PROTOCOL_VERSION + 1
+-            );
++            let official_herdr_protocol = 22;
++            assert_ne!(official_herdr_protocol, crate::protocol::PROTOCOL_VERSION);
++            let body = serde_json::json!({
++                "id": "autodetect:server:status",
++                "result": {
++                    "type": "pong",
++                    "version": "0.9.0",
++                    "protocol": official_herdr_protocol,
++                }
++            })
++            .to_string();
+             stream.write_all(body.as_bytes()).unwrap();
++            stream.write_all(b"\n").unwrap();
+             stream.flush().unwrap();
+         });
+ 
+@@ -594,15 +614,11 @@ test "$sid" = "$$"
+ 
+         let _ = handle.join();
+         assert!(
+-            message.contains("Stop the old server to use the new version"),
+-            "unexpected error: {message}"
+-        );
+-        assert!(
+-            message.contains("Run `herdl session stop work`"),
++            message.contains("different product or private protocol"),
+             "unexpected error: {message}"
+         );
+         assert!(
+-            message.contains("then run `herdl session attach work` again"),
++            message.contains("protocol 22"),
+             "unexpected error: {message}"
+         );
+         std::env::remove_var("XDG_CONFIG_HOME");
+diff --git a/src/server/client_transport.rs b/src/server/client_transport.rs
+index c57d0f86..e1016e6e 100644
+--- a/src/server/client_transport.rs
++++ b/src/server/client_transport.rs
+@@ -1728,6 +1728,88 @@ mod tests {
+         ));
+     }
+ 
++    #[test]
++    fn handshake_rejects_official_herdr_private_protocol() {
++        let (mut client_stream, server_stream, _path) =
++            local_stream_pair("client-handshake-official-herdr");
++        let (server_event_tx, mut server_event_rx) = mpsc::channel(1);
++        let should_quit = Arc::new(AtomicBool::new(false));
++        let handshake_quit = should_quit.clone();
++        let handle = std::thread::spawn(move || {
++            handle_client_handshake(server_stream, 41, &server_event_tx, &handshake_quit)
++        });
++
++        protocol::write_message(
++            &mut client_stream,
++            &ClientMessage::TerminalHello {
++                version: 22,
++                cols: 80,
++                rows: 24,
++                cell_width_px: 8,
++                cell_height_px: 16,
++                pixel_mouse: false,
++            },
++        )
++        .expect("write official hello");
++
++        let welcome: ServerMessage =
++            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read rejection");
++        assert!(matches!(
++            welcome,
++            ServerMessage::Welcome {
++                version: PROTOCOL_VERSION,
++                error: Some(_),
++                ..
++            }
++        ));
++        assert!(server_event_rx.try_recv().is_err());
++
++        drop(client_stream);
++        should_quit.store(true, Ordering::Release);
++        handle
++            .join()
++            .expect("handshake thread join")
++            .expect("handshake thread result");
++    }
++
++    #[test]
++    fn handshake_rejects_official_herdr_endpoint_kind() {
++        let (mut client_stream, server_stream, _path) =
++            local_stream_pair("client-endpoint-official-herdr");
++        let (server_event_tx, mut server_event_rx) = mpsc::channel(1);
++        let should_quit = Arc::new(AtomicBool::new(false));
++        let handshake_quit = should_quit.clone();
++        let handle = std::thread::spawn(move || {
++            handle_client_handshake(server_stream, 42, &server_event_tx, &handshake_quit)
++        });
++        let ClientMessage::EndpointControl { data, .. } = endpoint_hello(80, 24) else {
++            unreachable!();
++        };
++        protocol::write_message(
++            &mut client_stream,
++            &ClientMessage::EndpointControl {
++                kind: "endpoint.hello.v1".into(),
++                data,
++            },
++        )
++        .expect("write official endpoint hello");
++
++        let welcome: ServerMessage =
++            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read rejection");
++        assert!(matches!(
++            welcome,
++            ServerMessage::Welcome { error: Some(_), .. }
++        ));
++        assert!(server_event_rx.try_recv().is_err());
++
++        drop(client_stream);
++        should_quit.store(true, Ordering::Release);
++        handle
++            .join()
++            .expect("handshake thread join")
++            .expect("handshake thread result");
++    }
++
+     #[test]
+     fn handshake_negotiates_terminal_ansi_encoding() {
+         let (mut client_stream, server_stream, _path) = local_stream_pair("client-handshake-ansi");
+diff --git a/src/server/handoff.rs b/src/server/handoff.rs
+index 245edc31..c76eb70e 100644
+--- a/src/server/handoff.rs
++++ b/src/server/handoff.rs
+@@ -252,6 +252,7 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
+             manifest.version
+         )));
+     }
++    validate_source_protocol(manifest.source_protocol)?;
+     if manifest
+         .expected_protocol
+         .is_some_and(|protocol| protocol != crate::protocol::PROTOCOL_VERSION)
+@@ -268,7 +269,7 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
+         .is_some_and(|version| version != crate::build_info::version())
+     {
+         return Err(io::Error::other(format!(
+-            "handoff expected herdr v{}, but this server is v{}",
++            "handoff expected HerDL v{}, but this server is v{}",
+             manifest.expected_version.as_deref().unwrap_or("unknown"),
+             crate::build_info::version()
+         )));
+@@ -283,6 +284,25 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
+     })
+ }
+ 
++#[cfg(unix)]
++fn validate_source_protocol(source_protocol: u32) -> io::Result<()> {
++    if source_protocol == crate::protocol::PROTOCOL_VERSION {
++        return Ok(());
++    }
++    Err(io::Error::other(format!(
++        "handoff source belongs to a different product or private protocol: {source_protocol}"
++    )))
++}
++
++#[cfg(all(test, unix))]
++mod identity_tests {
++    #[test]
++    fn official_herdr_handoff_protocol_is_rejected() {
++        assert!(super::validate_source_protocol(22).is_err());
++        assert!(super::validate_source_protocol(crate::protocol::PROTOCOL_VERSION).is_ok());
++    }
++}
++
+ #[cfg(unix)]
+ pub(crate) fn report_restored(stream: &mut UnixStream) -> io::Result<()> {
+     stream.write_all(b"restored\n")?;
+diff --git a/tests/api_ping.rs b/tests/api_ping.rs
+index 190dc3b1..9b8064d4 100644
+--- a/tests/api_ping.rs
++++ b/tests/api_ping.rs
+@@ -214,15 +214,21 @@ impl JsonLineReader {
+     }
+ }
+ 
++fn with_product(json: &str) -> String {
++    let mut value: serde_json::Value = serde_json::from_str(json).unwrap();
++    value["product"] = serde_json::json!("herdl");
++    value.to_string()
++}
++
+ fn send_request(socket_path: &Path, json: &str) -> serde_json::Value {
+     let mut reader = JsonLineReader::connect(socket_path);
+-    reader.send_line(json);
++    reader.send_line(&with_product(json));
+     reader.read_json_line(Duration::from_secs(5))
+ }
+ 
+ fn open_subscription(socket_path: &Path, json: &str) -> JsonLineReader {
+     let mut reader = JsonLineReader::connect(socket_path);
+-    reader.send_line(json);
++    reader.send_line(&with_product(json));
+     reader
+ }
+ 
+@@ -299,14 +305,14 @@ fn ping_over_socket_returns_version() {
+ 
+     let value = send_request(
+         &socket_path,
+-        r#"{"id":"req_1","method":"ping","params":{}}"#,
++        r#"{"product":"herdl","id":"req_1","method":"ping","params":{}}"#,
+     );
+     assert_eq!(value["id"], "req_1");
+     assert_eq!(value["result"]["type"], "pong");
+     assert_eq!(value["result"]["version"], env!("CARGO_PKG_VERSION"));
+     // Intentionally hardcoded so wire protocol bumps require updating this test.
+     // Changing this value means old clients/servers are no longer compatible.
+-    assert_eq!(value["result"]["protocol"], 22);
++    assert_eq!(value["result"]["protocol"], support::CURRENT_PROTOCOL);
+ 
+     cleanup_spawned_herdr(child, base);
+ }
+@@ -340,7 +346,7 @@ contains = ["server-reload-marker"]
+ 
+     let response = send_request(
+         &socket_path,
+-        r#"{"id":"reload_manifests","method":"server.reload_agent_manifests","params":{}}"#,
++        r#"{"product":"herdl","id":"reload_manifests","method":"server.reload_agent_manifests","params":{}}"#,
+     );
+     assert_eq!(response["id"], "reload_manifests");
+     assert_eq!(response["result"]["type"], "agent_manifest_reload");
+@@ -371,7 +377,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"create","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"create","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -381,7 +387,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
+     let process_info = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"process","method":"pane.process_info","params":{{"pane_id":"{pane_id}"}}}}"#
++            r#"{{"product":"herdl","id":"process","method":"pane.process_info","params":{{"pane_id":"{pane_id}"}}}}"#
+         ),
+     );
+     let shell_pid = process_info["result"]["process_info"]["shell_pid"]
+@@ -394,7 +400,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
+     loop {
+         let panes = send_request(
+             &socket_path,
+-            r#"{"id":"panes","method":"pane.list","params":{}}"#,
++            r#"{"product":"herdl","id":"panes","method":"pane.list","params":{}}"#,
+         );
+         if panes["result"]["panes"]
+             .as_array()
+@@ -408,7 +414,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
+ 
+     let stopped = send_request(
+         &socket_path,
+-        r#"{"id":"stop","method":"server.stop","params":{}}"#,
++        r#"{"product":"herdl","id":"stop","method":"server.stop","params":{}}"#,
+     );
+     assert_eq!(stopped["result"]["type"], "ok");
+     child.child.wait().expect("server should stop cleanly");
+@@ -442,7 +448,7 @@ fn workspace_list_and_create_round_trip() {
+ 
+     let empty = send_request(
+         &socket_path,
+-        r#"{"id":"req_2","method":"workspace.list","params":{}}"#,
++        r#"{"product":"herdl","id":"req_2","method":"workspace.list","params":{}}"#,
+     );
+     assert_eq!(empty["id"], "req_2");
+     assert_eq!(empty["result"]["type"], "workspace_list");
+@@ -451,7 +457,7 @@ fn workspace_list_and_create_round_trip() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_3","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_3","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -484,7 +490,7 @@ fn workspace_list_and_create_round_trip() {
+ 
+     let listed = send_request(
+         &socket_path,
+-        r#"{"id":"req_4","method":"workspace.list","params":{}}"#,
++        r#"{"product":"herdl","id":"req_4","method":"workspace.list","params":{}}"#,
+     );
+     let workspaces = listed["result"]["workspaces"].as_array().unwrap();
+     assert_eq!(workspaces.len(), 1);
+@@ -493,7 +499,7 @@ fn workspace_list_and_create_round_trip() {
+     let fetched = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_5","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_5","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -502,7 +508,7 @@ fn workspace_list_and_create_round_trip() {
+     let metadata = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_workspace_metadata","method":"workspace.report_metadata","params":{{"workspace_id":"{}","source":"user:test","tokens":{{"jj_status":"2 changes"}}}}}}"#,
++            r#"{{"product":"herdl","id":"req_workspace_metadata","method":"workspace.report_metadata","params":{{"workspace_id":"{}","source":"user:test","tokens":{{"jj_status":"2 changes"}}}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -510,7 +516,7 @@ fn workspace_list_and_create_round_trip() {
+     let fetched = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_workspace_metadata_get","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_workspace_metadata_get","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -521,7 +527,7 @@ fn workspace_list_and_create_round_trip() {
+ 
+     let panes = send_request(
+         &socket_path,
+-        r#"{"id":"req_6","method":"pane.list","params":{}}"#,
++        r#"{"product":"herdl","id":"req_6","method":"pane.list","params":{}}"#,
+     );
+     let panes = panes["result"]["panes"].as_array().unwrap();
+     assert_eq!(panes.len(), 1);
+@@ -535,7 +541,7 @@ fn workspace_list_and_create_round_trip() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -545,7 +551,7 @@ fn workspace_list_and_create_round_trip() {
+     let read = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_8","method":"pane.read","params":{{"pane_id":"{}","source":"visible"}}}}"#,
++            r#"{{"product":"herdl","id":"req_8","method":"pane.read","params":{{"pane_id":"{}","source":"visible"}}}}"#,
+             legacy_pane_id
+         ),
+     );
+@@ -556,7 +562,7 @@ fn workspace_list_and_create_round_trip() {
+     let send_text = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_9","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo alpha; echo beta; echo gamma"}}}}"#,
++            r#"{{"product":"herdl","id":"req_9","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo alpha; echo beta; echo gamma"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -565,7 +571,7 @@ fn workspace_list_and_create_round_trip() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_10","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_10","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -576,7 +582,7 @@ fn workspace_list_and_create_round_trip() {
+     let recent = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_11","method":"pane.read","params":{{"pane_id":"{}","source":"recent","lines":50}}}}"#,
++            r#"{{"product":"herdl","id":"req_11","method":"pane.read","params":{{"pane_id":"{}","source":"recent","lines":50}}}}"#,
+             pane_id
+         ),
+     );
+@@ -587,7 +593,7 @@ fn workspace_list_and_create_round_trip() {
+         let limited = send_request(
+             &socket_path,
+             &format!(
+-                r#"{{"id":"req_11_{source}","method":"pane.read","params":{{"pane_id":"{}","source":"{source}","lines":2}}}}"#,
++                r#"{{"product":"herdl","id":"req_11_{source}","method":"pane.read","params":{{"pane_id":"{}","source":"{source}","lines":2}}}}"#,
+                 pane_id
+             ),
+         );
+@@ -601,7 +607,7 @@ fn workspace_list_and_create_round_trip() {
+     let waited = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_12","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"gamma"}},"timeout_ms":2000}}}}"#,
++            r#"{{"product":"herdl","id":"req_12","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"gamma"}},"timeout_ms":2000}}}}"#,
+             legacy_pane_id
+         ),
+     );
+@@ -620,7 +626,7 @@ fn workspace_list_and_create_round_trip() {
+     let send_input = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_12b","method":"pane.send_input","params":{{"pane_id":"{}","text":"echo delta","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_12b","method":"pane.send_input","params":{{"pane_id":"{}","text":"echo delta","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -629,7 +635,7 @@ fn workspace_list_and_create_round_trip() {
+     let waited_delta = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_12c","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"delta"}},"timeout_ms":2000}}}}"#,
++            r#"{{"product":"herdl","id":"req_12c","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"delta"}},"timeout_ms":2000}}}}"#,
+             pane_id
+         ),
+     );
+@@ -644,7 +650,7 @@ fn workspace_list_and_create_round_trip() {
+     let waited_regex = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_13","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"regex","value":"alp.*gamma"}},"timeout_ms":2000}}}}"#,
++            r#"{{"product":"herdl","id":"req_13","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"regex","value":"alp.*gamma"}},"timeout_ms":2000}}}}"#,
+             pane_id
+         ),
+     );
+@@ -659,7 +665,7 @@ fn workspace_list_and_create_round_trip() {
+     let timeout = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_14","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":10,"match":{{"type":"substring","value":"definitely-not-there"}},"timeout_ms":200}}}}"#,
++            r#"{{"product":"herdl","id":"req_14","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":10,"match":{{"type":"substring","value":"definitely-not-there"}},"timeout_ms":200}}}}"#,
+             pane_id
+         ),
+     );
+@@ -683,7 +689,7 @@ fn tab_methods_round_trip_over_socket() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_t1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -700,7 +706,7 @@ fn tab_methods_round_trip_over_socket() {
+     let tab_created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_t2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -726,7 +732,7 @@ fn tab_methods_round_trip_over_socket() {
+     let tab_list = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_t3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -737,7 +743,7 @@ fn tab_methods_round_trip_over_socket() {
+     let panes = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t3b","method":"pane.list","params":{{"workspace_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_t3b","method":"pane.list","params":{{"workspace_id":"{}"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -750,7 +756,7 @@ fn tab_methods_round_trip_over_socket() {
+     let tab_get = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t4","method":"tab.get","params":{{"tab_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_t4","method":"tab.get","params":{{"tab_id":"{}"}}}}"#,
+             second_tab_id
+         ),
+     );
+@@ -759,7 +765,7 @@ fn tab_methods_round_trip_over_socket() {
+     let renamed = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
++            r#"{{"product":"herdl","id":"req_t5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
+             second_tab_id
+         ),
+     );
+@@ -768,7 +774,7 @@ fn tab_methods_round_trip_over_socket() {
+     let focused = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_t6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
+             first_tab_id
+         ),
+     );
+@@ -778,7 +784,7 @@ fn tab_methods_round_trip_over_socket() {
+     let closed = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_t7","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_t7","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
+             second_tab_id
+         ),
+     );
+@@ -806,7 +812,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"fg_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"fg_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -836,7 +842,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"fg_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"fg_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -852,7 +858,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"fg_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"fg_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -864,7 +870,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
+ 
+     let panes = send_request(
+         &socket_path,
+-        r#"{"id":"fg_panes","method":"pane.list","params":{}}"#,
++        r#"{"product":"herdl","id":"fg_panes","method":"pane.list","params":{}}"#,
+     );
+     assert_eq!(
+         panes["result"]["panes"][0]["cwd"],
+@@ -878,7 +884,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
+     let process_info = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"fg_process_info","method":"pane.process_info","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"fg_process_info","method":"pane.process_info","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -905,7 +911,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
+     let reported = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"fg_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"probe","state":"working"}}}}"#,
++            r#"{{"product":"herdl","id":"fg_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"probe","state":"working"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -913,7 +919,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
+ 
+     let agents = send_request(
+         &socket_path,
+-        r#"{"id":"fg_agents","method":"agent.list","params":{}}"#,
++        r#"{"product":"herdl","id":"fg_agents","method":"agent.list","params":{}}"#,
+     );
+     assert_eq!(
+         agents["result"]["agents"][0]["cwd"],
+@@ -966,7 +972,7 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"member_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"member_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1003,7 +1009,7 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"member_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"member_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1038,7 +1044,7 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"member_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"member_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1181,7 +1187,7 @@ fn agent_methods_round_trip_over_socket() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"agent_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1201,7 +1207,7 @@ fn agent_methods_round_trip_over_socket() {
+     let renamed = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_rename_pane","method":"pane.rename","params":{{"pane_id":"{}","label":"worker"}}}}"#,
++            r#"{{"product":"herdl","id":"agent_rename_pane","method":"pane.rename","params":{{"pane_id":"{}","label":"worker"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1210,7 +1216,7 @@ fn agent_methods_round_trip_over_socket() {
+     let reported = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"pi","state":"working"}}}}"#,
++            r#"{{"product":"herdl","id":"agent_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"pi","state":"working"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1218,7 +1224,7 @@ fn agent_methods_round_trip_over_socket() {
+ 
+     let listed = send_request(
+         &socket_path,
+-        r#"{"id":"agent_list","method":"agent.list","params":{}}"#,
++        r#"{"product":"herdl","id":"agent_list","method":"agent.list","params":{}}"#,
+     );
+     let agents = listed["result"]["agents"].as_array().unwrap();
+     assert_eq!(agents.len(), 1);
+@@ -1231,7 +1237,7 @@ fn agent_methods_round_trip_over_socket() {
+     let fetched_by_pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_get_pane","method":"agent.get","params":{{"target":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"agent_get_pane","method":"agent.get","params":{{"target":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1243,7 +1249,7 @@ fn agent_methods_round_trip_over_socket() {
+     let renamed_first_agent = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_rename_first","method":"agent.rename","params":{{"target":"{}","name":"worker"}}}}"#,
++            r#"{{"product":"herdl","id":"agent_rename_first","method":"agent.rename","params":{{"target":"{}","name":"worker"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1251,27 +1257,27 @@ fn agent_methods_round_trip_over_socket() {
+ 
+     let fetched_by_name = send_request(
+         &socket_path,
+-        r#"{"id":"agent_get_name","method":"agent.get","params":{"target":"worker"}}"#,
++        r#"{"product":"herdl","id":"agent_get_name","method":"agent.get","params":{"target":"worker"}}"#,
+     );
+     assert_eq!(fetched_by_name["result"]["agent"]["name"], "worker");
+ 
+     let read = send_request(
+         &socket_path,
+-        r#"{"id":"agent_read","method":"agent.read","params":{"target":"worker","source":"visible"}}"#,
++        r#"{"product":"herdl","id":"agent_read","method":"agent.read","params":{"target":"worker","source":"visible"}}"#,
+     );
+     assert_eq!(read["result"]["type"], "pane_read");
+     assert_eq!(read["result"]["read"]["pane_id"], pane_id);
+ 
+     let sent = send_request(
+         &socket_path,
+-        r#"{"id":"agent_send_keys","method":"agent.send_keys","params":{"target":"worker","keys":["enter"]}}"#,
++        r#"{"product":"herdl","id":"agent_send_keys","method":"agent.send_keys","params":{"target":"worker","keys":["enter"]}}"#,
+     );
+     assert_eq!(sent["error"]["code"], "agent_not_ready");
+ 
+     let tab_created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_tab","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
++            r#"{{"product":"herdl","id":"agent_tab","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1286,7 +1292,7 @@ fn agent_methods_round_trip_over_socket() {
+     let second_reported = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_second_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"codex","state":"idle"}}}}"#,
++            r#"{{"product":"herdl","id":"agent_second_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"codex","state":"idle"}}}}"#,
+             second_pane_id
+         ),
+     );
+@@ -1295,7 +1301,7 @@ fn agent_methods_round_trip_over_socket() {
+     let second_renamed = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_second_rename","method":"agent.rename","params":{{"target":"{}","name":"reviewer"}}}}"#,
++            r#"{{"product":"herdl","id":"agent_second_rename","method":"agent.rename","params":{{"target":"{}","name":"reviewer"}}}}"#,
+             second_pane_id
+         ),
+     );
+@@ -1303,7 +1309,7 @@ fn agent_methods_round_trip_over_socket() {
+ 
+     let duplicate = send_request(
+         &socket_path,
+-        r#"{"id":"agent_duplicate","method":"agent.rename","params":{"target":"reviewer","name":"worker"}}"#,
++        r#"{"product":"herdl","id":"agent_duplicate","method":"agent.rename","params":{"target":"reviewer","name":"worker"}}"#,
+     );
+     assert_eq!(duplicate["error"]["code"], "agent_name_taken");
+     assert!(duplicate["error"]["message"]
+@@ -1313,13 +1319,13 @@ fn agent_methods_round_trip_over_socket() {
+ 
+     let agent_renamed = send_request(
+         &socket_path,
+-        r#"{"id":"agent_rename","method":"agent.rename","params":{"target":"reviewer","name":"qa"}}"#,
++        r#"{"product":"herdl","id":"agent_rename","method":"agent.rename","params":{"target":"reviewer","name":"qa"}}"#,
+     );
+     assert_eq!(agent_renamed["result"]["agent"]["name"], "qa");
+ 
+     let focused = send_request(
+         &socket_path,
+-        r#"{"id":"agent_focus","method":"agent.focus","params":{"target":"qa"}}"#,
++        r#"{"product":"herdl","id":"agent_focus","method":"agent.focus","params":{"target":"qa"}}"#,
+     );
+     assert_eq!(
+         focused["result"]["agent"]["terminal_id"],
+@@ -1345,7 +1351,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_nf_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_nf_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1361,7 +1367,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
+     let tab_created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_nf_2","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
++            r#"{{"product":"herdl","id":"req_nf_2","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1376,7 +1382,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
+     let tab_list = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_nf_3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_nf_3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1426,7 +1432,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
+ 
+     let mut reader = open_subscription(
+         &socket_path,
+-        r#"{"id":"sub_life_a","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"},{"type":"workspace.focused"},{"type":"tab.created"},{"type":"tab.focused"},{"type":"tab.renamed"},{"type":"pane.created"},{"type":"pane.focused"},{"type":"pane.agent_detected"}]}}"#,
++        r#"{"product":"herdl","id":"sub_life_a","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"},{"type":"workspace.focused"},{"type":"tab.created"},{"type":"tab.focused"},{"type":"tab.renamed"},{"type":"pane.created"},{"type":"pane.focused"},{"type":"pane.agent_detected"}]}}"#,
+     );
+ 
+     let ack = reader.read_json_line(Duration::from_secs(2));
+@@ -1436,7 +1442,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_l1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_l1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1483,7 +1489,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
+     let send_pi = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_l2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_l2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1491,7 +1497,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_l3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_l3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1504,7 +1510,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
+     let new_tab = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_l4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_l4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1522,7 +1528,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
+     let renamed_tab = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_l5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
++            r#"{{"product":"herdl","id":"req_l5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
+             second_tab_id
+         ),
+     );
+@@ -1549,7 +1555,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_pc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_pc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1564,7 +1570,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
+ 
+     let mut reader = open_subscription(
+         &socket_path,
+-        r#"{"id":"sub_life_b","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.created"},{"type":"pane.closed"}]}}"#,
++        r#"{"product":"herdl","id":"sub_life_b","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.created"},{"type":"pane.closed"}]}}"#,
+     );
+ 
+     let ack = reader.read_json_line(Duration::from_secs(2));
+@@ -1580,7 +1586,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
+     let split = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_pc_2","method":"pane.split","params":{{"target_pane_id":"{}","direction":"right","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_pc_2","method":"pane.split","params":{{"target_pane_id":"{}","direction":"right","focus":true}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1600,7 +1606,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
+     let closed = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_pc_3","method":"pane.close","params":{{"pane_id":"{}-2"}}}}"#,
++            r#"{{"product":"herdl","id":"req_pc_3","method":"pane.close","params":{{"pane_id":"{}-2"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1632,7 +1638,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_tc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_tc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1644,7 +1650,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
+     let new_tab = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_tc_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_tc_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1655,7 +1661,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
+ 
+     let mut reader = open_subscription(
+         &socket_path,
+-        r#"{"id":"sub_life_c","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.renamed"},{"type":"tab.closed"},{"type":"workspace.closed"}]}}"#,
++        r#"{"product":"herdl","id":"sub_life_c","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.renamed"},{"type":"tab.closed"},{"type":"workspace.closed"}]}}"#,
+     );
+ 
+     let ack = reader.read_json_line(Duration::from_secs(2));
+@@ -1665,7 +1671,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
+     let closed_tab = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_tc_3","method":"tab.close","params":{{"tab_id":"{}:2"}}}}"#,
++            r#"{{"product":"herdl","id":"req_tc_3","method":"tab.close","params":{{"tab_id":"{}:2"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1677,7 +1683,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
+     let renamed_ws = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_tc_4","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
++            r#"{{"product":"herdl","id":"req_tc_4","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -1690,7 +1696,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
+ 
+     let closed_ws = send_request(
+         &socket_path,
+-        r#"{"id":"req_tc_5","method":"workspace.close","params":{"workspace_id":"1"}}"#,
++        r#"{"product":"herdl","id":"req_tc_5","method":"workspace.close","params":{"workspace_id":"1"}}"#,
+     );
+     assert_eq!(closed_ws["result"]["type"], "ok");
+ 
+@@ -1735,7 +1741,7 @@ fn pane_report_agent_updates_effective_state() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1747,7 +1753,7 @@ fn pane_report_agent_updates_effective_state() {
+     let send_pi = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1755,7 +1761,7 @@ fn pane_report_agent_updates_effective_state() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1766,7 +1772,7 @@ fn pane_report_agent_updates_effective_state() {
+         let pane = send_request(
+             &socket_path,
+             &format!(
+-                r#"{{"id":"req_hook_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++                r#"{{"product":"herdl","id":"req_hook_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                 pane_id
+             ),
+         );
+@@ -1784,7 +1790,7 @@ fn pane_report_agent_updates_effective_state() {
+     let session = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
+             pane_id,
+             session_path.display()
+         ),
+@@ -1793,7 +1799,7 @@ fn pane_report_agent_updates_effective_state() {
+     let hook = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_5","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","message":"thinking","agent_session_path":"{}","seq":2}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_5","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","message":"thinking","agent_session_path":"{}","seq":2}}}}"#,
+             pane_id,
+             session_path.display()
+         ),
+@@ -1803,7 +1809,7 @@ fn pane_report_agent_updates_effective_state() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1823,7 +1829,7 @@ fn pane_report_agent_updates_effective_state() {
+     let metadata = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_metadata","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"herdr:pi","title":"Refactor auth","display_agent":"Pi auth","state_labels":{{"working":"deep in the mines"}},"tokens":{{"summary":"reviewing auth","model":"opus"}}}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_metadata","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"herdr:pi","title":"Refactor auth","display_agent":"Pi auth","state_labels":{{"working":"deep in the mines"}},"tokens":{{"summary":"reviewing auth","model":"opus"}}}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1832,7 +1838,7 @@ fn pane_report_agent_updates_effective_state() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_metadata_get","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_metadata_get","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1853,7 +1859,7 @@ fn pane_report_agent_updates_effective_state() {
+     let agent = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_metadata_agent","method":"agent.get","params":{{"target":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_metadata_agent","method":"agent.get","params":{{"target":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1883,7 +1889,7 @@ fn pane_report_agent_updates_effective_state() {
+     let blank_source_metadata = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_metadata_blank_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"   ","title":"x"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_metadata_blank_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"   ","title":"x"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1895,7 +1901,7 @@ fn pane_report_agent_updates_effective_state() {
+     let blank_title_clear_metadata = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_metadata_blank_title_clear","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","title":"   ","clear_title":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_metadata_blank_title_clear","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","title":"   ","clear_title":true}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1907,7 +1913,7 @@ fn pane_report_agent_updates_effective_state() {
+     let blank_authority_source_metadata = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_metadata_blank_authority_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","applies_to_source":"   ","title":"x"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_metadata_blank_authority_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","applies_to_source":"   ","title":"x"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1933,7 +1939,7 @@ fn pane_report_agent_accepts_unknown_agent_labels() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_generic_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_generic_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -1945,7 +1951,7 @@ fn pane_report_agent_accepts_unknown_agent_labels() {
+     let hook = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_generic_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:hermes","agent":"hermes","state":"working"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_generic_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:hermes","agent":"hermes","state":"working"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -1954,7 +1960,7 @@ fn pane_report_agent_accepts_unknown_agent_labels() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_hook_generic_3","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_hook_generic_3","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2006,7 +2012,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_release_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_release_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -2018,7 +2024,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+     let send_pi = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_release_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_release_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2026,7 +2032,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_release_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_release_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2037,7 +2043,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+         let pane = send_request(
+             &socket_path,
+             &format!(
+-                r#"{{"id":"req_release_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++                r#"{{"product":"herdl","id":"req_release_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                 pane_id
+             ),
+         );
+@@ -2055,7 +2061,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+     let session = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_release_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
++            r#"{{"product":"herdl","id":"req_release_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
+             pane_id,
+             session_path.display()
+         ),
+@@ -2064,7 +2070,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+     let hook = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_release_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","agent_session_path":"{}","seq":2}}}}"#,
++            r#"{{"product":"herdl","id":"req_release_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","agent_session_path":"{}","seq":2}}}}"#,
+             pane_id,
+             session_path.display()
+         ),
+@@ -2074,7 +2080,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+     let released = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_release_5","method":"pane.release_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_release_5","method":"pane.release_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2085,7 +2091,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+         let pane = send_request(
+             &socket_path,
+             &format!(
+-                r#"{{"id":"req_release_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++                r#"{{"product":"herdl","id":"req_release_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                 pane_id
+             ),
+         );
+@@ -2104,7 +2110,7 @@ fn official_release_waits_for_confirmed_process_exit() {
+         let pane = send_request(
+             &socket_path,
+             &format!(
+-                r#"{{"id":"req_release_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++                r#"{{"product":"herdl","id":"req_release_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                 pane_id
+             ),
+         );
+@@ -2157,7 +2163,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_clear_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_clear_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -2169,7 +2175,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+     let send_pi = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_clear_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_clear_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2177,7 +2183,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_clear_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_clear_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2188,7 +2194,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+         let pane = send_request(
+             &socket_path,
+             &format!(
+-                r#"{{"id":"req_clear_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++                r#"{{"product":"herdl","id":"req_clear_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                 pane_id
+             ),
+         );
+@@ -2205,7 +2211,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+     let fallback_before_hook = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_clear_fallback","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_clear_fallback","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2217,7 +2223,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+     let hook = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_clear_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"idle"}}}}"#,
++            r#"{{"product":"herdl","id":"req_clear_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"idle"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2226,7 +2232,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+     let cleared = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_clear_5","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"herdr:pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_clear_5","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"herdr:pi"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2235,7 +2241,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_clear_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_clear_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2282,7 +2288,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_20","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_20","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -2293,7 +2299,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
+ 
+     let panes = send_request(
+         &socket_path,
+-        r#"{"id":"req_21","method":"pane.list","params":{}}"#,
++        r#"{"product":"herdl","id":"req_21","method":"pane.list","params":{}}"#,
+     );
+     let pane_id = panes["result"]["panes"][0]["pane_id"]
+         .as_str()
+@@ -2304,7 +2310,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
+     let mut reader = open_subscription(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"sub_1","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.output_matched","pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"hello from socket"}}}},{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"idle"}}]}}}}"#,
++            r#"{{"product":"herdl","id":"sub_1","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.output_matched","pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"hello from socket"}}}},{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"idle"}}]}}}}"#,
+             legacy_pane_id, legacy_pane_id,
+         ),
+     );
+@@ -2316,7 +2322,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
+     let send_text = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_22","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo hello from socket"}}}}"#,
++            r#"{{"product":"herdl","id":"req_22","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo hello from socket"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2324,7 +2330,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_23","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_23","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2346,7 +2352,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
+     let send_pi = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_24","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_24","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2354,7 +2360,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_25","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_25","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2410,7 +2416,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -2426,7 +2432,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let tab_created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+             workspace_id
+         ),
+     );
+@@ -2435,7 +2441,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let mut reader = open_subscription(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"sub_status","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
++            r#"{{"product":"herdl","id":"sub_status","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
+             background_pane_id,
+         ),
+     );
+@@ -2446,7 +2452,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let send_pi = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_status_3","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
++            r#"{{"product":"herdl","id":"req_status_3","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+             background_pane_id
+         ),
+     );
+@@ -2454,7 +2460,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let send_enter = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_status_4","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
++            r#"{{"product":"herdl","id":"req_status_4","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+             background_pane_id
+         ),
+     );
+@@ -2469,7 +2475,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let pane = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_status_5","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_status_5","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             background_pane_id
+         ),
+     );
+@@ -2478,7 +2484,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let mut already_done_reader = open_subscription(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"sub_status_already_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
++            r#"{{"product":"herdl","id":"sub_status_already_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
+             background_pane_id,
+         ),
+     );
+@@ -2499,7 +2505,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let tab_focus = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_status_6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_status_6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
+             focused_tab_id
+         ),
+     );
+@@ -2508,7 +2514,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
+     let pane_after_focus = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_status_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
++            r#"{{"product":"herdl","id":"req_status_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+             background_pane_id
+         ),
+     );
+@@ -2533,7 +2539,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_meta_sub_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_meta_sub_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -2545,7 +2551,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
+     let report_agent = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_meta_sub_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:pi","agent":"pi","state":"working"}}}}"#,
++            r#"{{"product":"herdl","id":"req_meta_sub_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:pi","agent":"pi","state":"working"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2554,7 +2560,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
+     let mut done_reader = open_subscription(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"sub_meta_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
++            r#"{{"product":"herdl","id":"sub_meta_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
+             pane_id,
+         ),
+     );
+@@ -2565,7 +2571,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
+     let metadata = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_meta_sub_3","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"filtered out"}}}}"#,
++            r#"{{"product":"herdl","id":"req_meta_sub_3","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"filtered out"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -2580,7 +2586,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
+     let mut reader = open_subscription(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"sub_meta_ttl","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}"}}]}}}}"#,
++            r#"{{"product":"herdl","id":"sub_meta_ttl","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}"}}]}}}}"#,
+             pane_id,
+         ),
+     );
+@@ -2591,7 +2597,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
+     let metadata = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_meta_sub_4","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"short lived","ttl_ms":100}}}}"#,
++            r#"{{"product":"herdl","id":"req_meta_sub_4","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"short lived","ttl_ms":100}}}}"#,
+             pane_id
+         ),
+     );
+diff --git a/tests/auto_detect.rs b/tests/auto_detect.rs
+index c289aa1d..c8e3c7d8 100644
+--- a/tests/auto_detect.rs
++++ b/tests/auto_detect.rs
+@@ -171,7 +171,7 @@ fn spawn_herdr_auto(
+ fn ping_socket(socket_path: &Path) -> String {
+     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+ 
+-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
++    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
+     writeln!(stream, "{}", request).unwrap();
+ 
+     let mut reader = BufReader::new(stream);
+@@ -631,7 +631,7 @@ fn auto_detect_respects_nested_guard_before_auto_attach() {
+         let mut stream = UnixStream::connect(&api_socket).unwrap();
+         writeln!(
+             stream,
+-            r#"{{"id":"ws_before","method":"workspace.list","params":{{}}}}"#
++            r#"{{"product":"herdl","id":"ws_before","method":"workspace.list","params":{{}}}}"#
+         )
+         .unwrap();
+         stream
+@@ -664,7 +664,7 @@ fn auto_detect_respects_nested_guard_before_auto_attach() {
+         let mut stream = UnixStream::connect(&api_socket).unwrap();
+         writeln!(
+             stream,
+-            r#"{{"id":"ws_after","method":"workspace.list","params":{{}}}}"#
++            r#"{{"product":"herdl","id":"ws_after","method":"workspace.list","params":{{}}}}"#
+         )
+         .unwrap();
+         stream
+diff --git a/tests/cli/agent_options.rs b/tests/cli/agent_options.rs
+index 55355b11..ba8d634f 100644
+--- a/tests/cli/agent_options.rs
++++ b/tests/cli/agent_options.rs
+@@ -37,7 +37,7 @@ fn agent_wait_accepts_repeated_until_and_exits_when_one_status_matches() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_2","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_2","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+diff --git a/tests/cli/agent_wait.rs b/tests/cli/agent_wait.rs
+index 2ee84ac7..257c77f6 100644
+--- a/tests/cli/agent_wait.rs
++++ b/tests/cli/agent_wait.rs
+@@ -13,7 +13,7 @@ fn agent_wait_exits_immediately_when_status_already_matches() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_immediate_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_immediate_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -26,7 +26,7 @@ fn agent_wait_exits_immediately_when_status_already_matches() {
+     let reported = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_immediate_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"idle"}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_immediate_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"idle"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -69,7 +69,7 @@ fn agent_wait_times_out_when_status_does_not_match() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_timeout_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_timeout_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -78,7 +78,7 @@ fn agent_wait_times_out_when_status_does_not_match() {
+     let reported = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_timeout_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"working"}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_timeout_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"working"}}}}"#,
+             pane_id
+         ),
+     );
+@@ -143,7 +143,7 @@ fn agent_wait_exits_when_done_status_matches() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -155,7 +155,7 @@ fn agent_wait_exits_when_done_status_matches() {
+     let tab_created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+             workspace_id
+         ),
+     );
+diff --git a/tests/cli/agents.rs b/tests/cli/agents.rs
+index f5e58ea8..98849d53 100644
+--- a/tests/cli/agents.rs
++++ b/tests/cli/agents.rs
+@@ -1212,7 +1212,7 @@ fn agent_wait_tolerates_detection_uncertainty_and_pane_target_rename() {
+     let cleared = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"agent_wait_uncertain","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"custom:uncertain"}}}}"#,
++            r#"{{"product":"herdl","id":"agent_wait_uncertain","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"custom:uncertain"}}}}"#,
+             pane_id
+         ),
+     );
+diff --git a/tests/cli/panes.rs b/tests/cli/panes.rs
+index b33ad61e..11852dc8 100644
+--- a/tests/cli/panes.rs
++++ b/tests/cli/panes.rs
+@@ -110,7 +110,7 @@ fn pane_run_read_and_wait_commands_work() {
+     send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_cli_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_cli_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -522,7 +522,7 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_env_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_env_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+@@ -580,7 +580,7 @@ fn pane_agent_reports_accept_options_before_pane() {
+     let created = send_request(
+         &socket_path,
+         &format!(
+-            r#"{{"id":"req_agent_report_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
++            r#"{{"product":"herdl","id":"req_agent_report_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+             base.display()
+         ),
+     );
+diff --git a/tests/cli/sessions.rs b/tests/cli/sessions.rs
+index 9ed7cfeb..2191a937 100644
+--- a/tests/cli/sessions.rs
++++ b/tests/cli/sessions.rs
+@@ -389,7 +389,7 @@ fn status_commands_report_client_and_server_versions() {
+         "stdout: {full_stdout}"
+     );
+     assert!(
+-        full_stdout.contains("  protocol: 22"),
++        full_stdout.contains(&format!("  protocol: {CURRENT_PROTOCOL}")),
+         "stdout: {full_stdout}"
+     );
+     assert!(full_stdout.contains("server:\n"), "stdout: {full_stdout}");
+@@ -430,7 +430,7 @@ fn status_commands_report_client_and_server_versions() {
+         "stdout: {server_stdout}"
+     );
+     assert!(
+-        server_stdout.contains("private_protocol: 22"),
++        server_stdout.contains(&format!("private_protocol: {CURRENT_PROTOCOL}")),
+         "stdout: {server_stdout}"
+     );
+ 
+@@ -442,7 +442,7 @@ fn status_commands_report_client_and_server_versions() {
+         "stdout: {client_stdout}"
+     );
+     assert!(
+-        client_stdout.contains("protocol: 22"),
++        client_stdout.contains(&format!("protocol: {CURRENT_PROTOCOL}")),
+         "stdout: {client_stdout}"
+     );
+     assert!(
+@@ -456,7 +456,7 @@ fn status_commands_report_client_and_server_versions() {
+ 
+     let full_json = run_cli_json(&socket_path, &["status", "--json"]);
+     assert_eq!(full_json["client"]["version"], env!("CARGO_PKG_VERSION"));
+-    assert_eq!(full_json["client"]["protocol"], 22);
++    assert_eq!(full_json["client"]["protocol"], CURRENT_PROTOCOL);
+     assert_eq!(full_json["client"]["endpoint_protocol_generation"], 1);
+     assert_eq!(full_json["server"]["status"], "running");
+     assert_eq!(full_json["server"]["running"], true);
+@@ -474,13 +474,13 @@ fn status_commands_report_client_and_server_versions() {
+     let server_json = run_cli_json(&socket_path, &["status", "server", "--json"]);
+     assert_eq!(server_json["status"], "running");
+     assert_eq!(server_json["version"], env!("CARGO_PKG_VERSION"));
+-    assert_eq!(server_json["protocol"], 22);
++    assert_eq!(server_json["protocol"], CURRENT_PROTOCOL);
+     assert_eq!(server_json["compatible"], true);
+     assert_eq!(server_json["endpoint_compatible"], true);
+ 
+     let client_json = run_cli_json(&socket_path, &["status", "client", "--json"]);
+     assert_eq!(client_json["version"], env!("CARGO_PKG_VERSION"));
+-    assert_eq!(client_json["protocol"], 22);
++    assert_eq!(client_json["protocol"], CURRENT_PROTOCOL);
+     assert_eq!(client_json["endpoint_protocol_generation"], 1);
+     assert!(client_json["binary"]
+         .as_str()
+diff --git a/tests/client_mode.rs b/tests/client_mode.rs
+index 1be089a5..e5647214 100644
+--- a/tests/client_mode.rs
++++ b/tests/client_mode.rs
+@@ -204,7 +204,7 @@ fn spawn_server_with_config(
+ fn ping_socket(socket_path: &PathBuf) -> String {
+     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+ 
+-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
++    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
+     writeln!(stream, "{}", request).unwrap();
+ 
+     let mut reader = BufReader::new(stream);
+@@ -215,6 +215,8 @@ fn ping_socket(socket_path: &PathBuf) -> String {
+ 
+ fn send_json_request(socket_path: &PathBuf, request: &str) -> Value {
+     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
++    let mut request: Value = serde_json::from_str(request).unwrap();
++    request["product"] = serde_json::json!("herdl");
+     writeln!(stream, "{}", request).unwrap();
+ 
+     let mut reader = BufReader::new(stream);
+@@ -227,7 +229,7 @@ fn first_pane_id_in_workspace(socket_path: &PathBuf, workspace_id: &str) -> Stri
+     let deadline = Instant::now() + Duration::from_secs(5);
+     while Instant::now() < deadline {
+         let request = format!(
+-            r#"{{"id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
++            r#"{{"product":"herdl","id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
+         );
+         let panes = send_json_request(socket_path, &request);
+         if let Some(pane_id) = panes["result"]["panes"]
+@@ -818,7 +820,7 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
+         }
+         let _ = send_json_request(
+             &api_socket,
+-            r#"{"id":"stop","method":"server.stop","params":{}}"#,
++            r#"{"product":"herdl","id":"stop","method":"server.stop","params":{}}"#,
+         );
+         cleanup_test_base(&base);
+     }
+@@ -1641,7 +1643,7 @@ fn pane_spawn_cwd_fallback_in_server() {
+ 
+     let workspaces = send_json_request(
+         &api_socket,
+-        r#"{"id":"workspace_list","method":"workspace.list","params":{}}"#,
++        r#"{"product":"herdl","id":"workspace_list","method":"workspace.list","params":{}}"#,
+     );
+     let restored_workspace = workspaces["result"]["workspaces"]
+         .as_array()
+@@ -1655,7 +1657,9 @@ fn pane_spawn_cwd_fallback_in_server() {
+     let pane_id = first_pane_id_in_workspace(&api_socket, workspace_id);
+     let pane = send_json_request(
+         &api_socket,
+-        &format!(r#"{{"id":"pane_get","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#),
++        &format!(
++            r#"{{"product":"herdl","id":"pane_get","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#
++        ),
+     );
+     assert_eq!(pane["result"]["pane"]["workspace_id"], workspace_id);
+     let cwd = pane["result"]["pane"]["cwd"]
+@@ -1807,7 +1811,7 @@ fn client_receives_notify_on_agent_state_change() {
+ 
+     // Create a workspace via the API.
+     let mut ws_stream = UnixStream::connect(&api_socket).expect("connect to API");
+-    let request = r#"{"id":"1","method":"workspace.create","params":{}}"#;
++    let request = r#"{"product":"herdl","id":"1","method":"workspace.create","params":{}}"#;
+     writeln!(ws_stream, "{}", request).unwrap();
+     let mut reader = BufReader::new(ws_stream);
+     let mut ws_response = String::new();
+@@ -1822,8 +1826,9 @@ fn client_receives_notify_on_agent_state_change() {
+ 
+     // Get pane list to find a pane ID.
+     let mut pane_stream = UnixStream::connect(&api_socket).expect("connect to API");
+-    let pane_request =
+-        format!(r#"{{"id":"2","method":"pane.list","params":{{"workspace_id":"{ws_id}"}}}}"#);
++    let pane_request = format!(
++        r#"{{"product":"herdl","id":"2","method":"pane.list","params":{{"workspace_id":"{ws_id}"}}}}"#
++    );
+     writeln!(pane_stream, "{}", pane_request).unwrap();
+     let mut pane_reader = BufReader::new(pane_stream);
+     let mut pane_response = String::new();
+@@ -1840,7 +1845,7 @@ fn client_receives_notify_on_agent_state_change() {
+     // ServerMessage::Notify with kind=Sound (Request sound).
+     let mut report_stream = UnixStream::connect(&api_socket).expect("connect to API");
+     let report_request = format!(
+-        r#"{{"id":"3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"blocked","source":"test"}}}}"#
++        r#"{{"product":"herdl","id":"3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"blocked","source":"test"}}}}"#
+     );
+     writeln!(report_stream, "{}", report_request).unwrap();
+     let mut report_reader = BufReader::new(report_stream);
+@@ -1877,7 +1882,7 @@ fn client_receives_notify_on_agent_state_change() {
+     // if the pane is in a background workspace.
+     // First, create a second workspace to make the first one "background".
+     let mut ws2_stream = UnixStream::connect(&api_socket).expect("connect to API");
+-    let ws2_request = r#"{"id":"4","method":"workspace.create","params":{}}"#;
++    let ws2_request = r#"{"product":"herdl","id":"4","method":"workspace.create","params":{}}"#;
+     writeln!(ws2_stream, "{}", ws2_request).unwrap();
+     let mut ws2_reader = BufReader::new(ws2_stream);
+     let mut ws2_response = String::new();
+@@ -1891,7 +1896,7 @@ fn client_receives_notify_on_agent_state_change() {
+         .to_string();
+     let mut focus_stream = UnixStream::connect(&api_socket).expect("connect to API");
+     let focus_request = format!(
+-        r#"{{"id":"5","method":"workspace.focus","params":{{"workspace_id":"{ws2_id}"}}}}"#
++        r#"{{"product":"herdl","id":"5","method":"workspace.focus","params":{{"workspace_id":"{ws2_id}"}}}}"#
+     );
+     writeln!(focus_stream, "{}", focus_request).unwrap();
+     let mut focus_reader = BufReader::new(focus_stream);
+@@ -1909,7 +1914,7 @@ fn client_receives_notify_on_agent_state_change() {
+     // background workspace should trigger a Done sound notification.
+     let mut work_stream = UnixStream::connect(&api_socket).expect("connect to API");
+     let work_request = format!(
+-        r#"{{"id":"6","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"working","source":"test"}}}}"#
++        r#"{{"product":"herdl","id":"6","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"working","source":"test"}}}}"#
+     );
+     writeln!(work_stream, "{}", work_request).unwrap();
+     let mut work_reader = BufReader::new(work_stream);
+@@ -1925,7 +1930,7 @@ fn client_receives_notify_on_agent_state_change() {
+ 
+     let mut idle_stream = UnixStream::connect(&api_socket).expect("connect to API");
+     let idle_request = format!(
+-        r#"{{"id":"7","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"idle","source":"test"}}}}"#
++        r#"{{"product":"herdl","id":"7","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"idle","source":"test"}}}}"#
+     );
+     writeln!(idle_stream, "{}", idle_request).unwrap();
+     let mut idle_reader = BufReader::new(idle_stream);
+diff --git a/tests/cross_area.rs b/tests/cross_area.rs
+index 585480a7..cd45f9e3 100644
+--- a/tests/cross_area.rs
++++ b/tests/cross_area.rs
+@@ -179,6 +179,7 @@ fn spawn_client_process(
+ fn send_json_request(socket_path: &Path, id: &str, method: &str, params: Value) -> Value {
+     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+     let request = json!({
++        "product": "herdl",
+         "id": id,
+         "method": method,
+         "params": params
+diff --git a/tests/detach_reattach.rs b/tests/detach_reattach.rs
+index 146fb2af..484fe08a 100644
+--- a/tests/detach_reattach.rs
++++ b/tests/detach_reattach.rs
+@@ -146,7 +146,7 @@ fn spawn_server_with_config(
+ fn ping_socket(socket_path: &PathBuf) -> String {
+     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+ 
+-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
++    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
+     writeln!(stream, "{}", request).unwrap();
+ 
+     let mut reader = BufReader::new(stream);
+@@ -157,6 +157,8 @@ fn ping_socket(socket_path: &PathBuf) -> String {
+ 
+ fn send_json_request(socket_path: &PathBuf, request: &str) -> Value {
+     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
++    let mut request: Value = serde_json::from_str(request).unwrap();
++    request["product"] = serde_json::json!("herdl");
+     writeln!(stream, "{}", request).unwrap();
+ 
+     let mut reader = BufReader::new(stream);
+@@ -169,7 +171,7 @@ fn workspace_create(socket_path: &PathBuf, label: &str) -> Value {
+     send_json_request(
+         socket_path,
+         &format!(
+-            r#"{{"id":"workspace_create","method":"workspace.create","params":{{"label":"{label}"}}}}"#
++            r#"{{"product":"herdl","id":"workspace_create","method":"workspace.create","params":{{"label":"{label}"}}}}"#
+         ),
+     )
+ }
+@@ -177,7 +179,7 @@ fn workspace_create(socket_path: &PathBuf, label: &str) -> Value {
+ fn workspace_list(socket_path: &PathBuf) -> Value {
+     send_json_request(
+         socket_path,
+-        r#"{"id":"workspace_list","method":"workspace.list","params":{}}"#,
++        r#"{"product":"herdl","id":"workspace_list","method":"workspace.list","params":{}}"#,
+     )
+ }
+ 
+@@ -185,7 +187,7 @@ fn pane_list(socket_path: &PathBuf, workspace_id: &str) -> Value {
+     send_json_request(
+         socket_path,
+         &format!(
+-            r#"{{"id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
++            r#"{{"product":"herdl","id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
+         ),
+     )
+ }
+@@ -194,7 +196,7 @@ fn pane_read_recent(socket_path: &PathBuf, pane_id: &str) -> Value {
+     send_json_request(
+         socket_path,
+         &format!(
+-            r#"{{"id":"pane_read","method":"pane.read","params":{{"pane_id":"{pane_id}","source":"recent"}}}}"#
++            r#"{{"product":"herdl","id":"pane_read","method":"pane.read","params":{{"pane_id":"{pane_id}","source":"recent"}}}}"#
+         ),
+     )
+ }
+@@ -210,7 +212,7 @@ fn pane_send_text(socket_path: &PathBuf, pane_id: &str, text: &str) -> Value {
+     send_json_request(
+         socket_path,
+         &format!(
+-            r#"{{"id":"pane_send_text","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":{}}}}}"#,
++            r#"{{"product":"herdl","id":"pane_send_text","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":{}}}}}"#,
+             serde_json::to_string(text).unwrap()
+         ),
+     )
+@@ -371,7 +373,7 @@ fn reattach_after_detach_shows_current_state() {
+ 
+     // Create a workspace via API while client A is attached.
+     let mut ws_stream = UnixStream::connect(&api_socket).expect("connect to API");
+-    let request = r#"{"id":"1","method":"workspace.create","params":{"label":"reattach-test"}}"#;
++    let request = r#"{"product":"herdl","id":"1","method":"workspace.create","params":{"label":"reattach-test"}}"#;
+     writeln!(ws_stream, "{}", request).unwrap();
+     let mut reader = BufReader::new(ws_stream);
+     let mut ws_response = String::new();
+@@ -416,7 +418,7 @@ fn reattach_after_detach_shows_current_state() {
+ 
+     // Verify the workspace still exists via API.
+     let mut list_stream = UnixStream::connect(&api_socket).expect("connect to API");
+-    let list_request = r#"{"id":"2","method":"workspace.list","params":{}}"#;
++    let list_request = r#"{"product":"herdl","id":"2","method":"workspace.list","params":{}}"#;
+     writeln!(list_stream, "{}", list_request).unwrap();
+     let mut list_reader = BufReader::new(list_stream);
+     let mut list_response = String::new();
+@@ -805,7 +807,7 @@ fn output_accumulated_while_detached_visible_on_reattach() {
+     // Send text to the pane via API while detached.
+     let mut send_stream = UnixStream::connect(&api_socket).expect("connect to API");
+     let send_request = format!(
+-        r#"{{"id":"4","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":"echo DURING_DETACH\n"}}}}"#
++        r#"{{"product":"herdl","id":"4","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":"echo DURING_DETACH\n"}}}}"#
+     );
+     writeln!(send_stream, "{}", send_request).unwrap();
+     let mut send_reader = BufReader::new(send_stream);
+diff --git a/tests/live_handoff.rs b/tests/live_handoff.rs
+index d6ce9df6..1688185c 100644
+--- a/tests/live_handoff.rs
++++ b/tests/live_handoff.rs
+@@ -226,8 +226,9 @@ fn spawn_server_with_args_and_socket_env(
+ 
+ fn try_request(
+     socket_path: &Path,
+-    request: serde_json::Value,
++    mut request: serde_json::Value,
+ ) -> Result<serde_json::Value, RequestError> {
++    request["product"] = serde_json::json!("herdl");
+     let mut stream = UnixStream::connect(socket_path).map_err(|err| RequestError {
+         retryable: true,
+         message: format!("connect {}: {err}", socket_path.display()),
+@@ -289,7 +290,7 @@ fn wait_for_api(socket_path: &Path, timeout: Duration) {
+     while Instant::now() < deadline {
+         match try_request(
+             socket_path,
+-            serde_json::json!({"id":"test:ping","method":"ping","params":{}}),
++            serde_json::json!({"product":"herdl","id":"test:ping","method":"ping","params":{}}),
+         ) {
+             Ok(response) if response.get("result").is_some() => return,
+             Ok(response) => panic!("api ping returned non-success response: {response}"),
+@@ -336,7 +337,7 @@ fn link_plugin(socket_path: &Path, root: &Path) {
+ fn listed_plugin_ids(socket_path: &Path) -> Vec<String> {
+     let response = request(
+         socket_path,
+-        serde_json::json!({"id":"test:plugin:list","method":"plugin.list","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:plugin:list","method":"plugin.list","params":{}}),
+     );
+     assert_ok(response.clone());
+     response["result"]["plugins"]
+@@ -597,7 +598,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     let replacement_pid =
+         wait_for_replacement_server_pid(&runtime_dir, server_pid, Duration::from_secs(10));
+@@ -606,7 +607,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     drop(spawned);
+     cleanup_test_base(&base);
+@@ -641,7 +642,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     let replacement_pid =
+         wait_for_replacement_server_pid(&runtime_dir, old_pid, Duration::from_secs(10));
+@@ -665,7 +666,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
+     loop {
+         let panes = request(
+             &api_socket,
+-            serde_json::json!({"id":"test:panes","method":"pane.list","params":{}}),
++            serde_json::json!({"product":"herdl","id":"test:panes","method":"pane.list","params":{}}),
+         );
+         if panes["result"]["panes"]
+             .as_array()
+@@ -679,7 +680,7 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     ));
+     let deadline = Instant::now() + Duration::from_secs(5);
+     while Path::new(&format!("/proc/{replacement_pid}")).exists() {
+@@ -718,7 +719,7 @@ fn live_handoff_preserves_named_session_socket_paths() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -730,7 +731,7 @@ fn live_handoff_preserves_named_session_socket_paths() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -763,7 +764,7 @@ fn live_handoff_ignores_leaked_default_socket_env_for_named_session() {
+ 
+     assert_ok(request(
+         &work_api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(work_spawned);
+     wait_for_api(&default_api_socket, Duration::from_secs(10));
+@@ -772,11 +773,11 @@ fn live_handoff_ignores_leaked_default_socket_env_for_named_session() {
+ 
+     let _ = request(
+         &work_api_socket,
+-        serde_json::json!({"id":"test:stop-work","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop-work","method":"server.stop","params":{}}),
+     );
+     let _ = request(
+         &default_api_socket,
+-        serde_json::json!({"id":"test:stop-default","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop-default","method":"server.stop","params":{}}),
+     );
+     drop(default_spawned);
+     cleanup_test_base(&base);
+@@ -804,7 +805,7 @@ fn live_handoff_preserves_client_socket_env_without_api_socket_env() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -812,7 +813,7 @@ fn live_handoff_preserves_client_socket_env_without_api_socket_env() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -842,7 +843,7 @@ fn live_handoff_preserves_installed_plugins() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -859,7 +860,7 @@ fn live_handoff_preserves_installed_plugins() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -983,7 +984,7 @@ fn live_handoff_preserves_pane_process_io() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     assert!(
+         wait_for_message_variant(
+@@ -1057,7 +1058,7 @@ fn live_handoff_preserves_pane_process_io() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     let _ = client_socket;
+     cleanup_test_base(&base);
+@@ -1127,7 +1128,7 @@ pathlib.Path({received:?}).write_text(data.hex())
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -1154,7 +1155,7 @@ pathlib.Path({received:?}).write_text(data.hex())
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -1223,7 +1224,7 @@ pathlib.Path({received:?}).write_text(data.hex())
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -1254,7 +1255,7 @@ pathlib.Path({received:?}).write_text(data.hex())
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -1300,7 +1301,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -1320,7 +1321,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
+     ));
+     let agents = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:agent-list","method":"agent.list","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:agent-list","method":"agent.list","params":{}}),
+     );
+     let found = agents["result"]["agents"]
+         .as_array()
+@@ -1337,7 +1338,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -1450,7 +1451,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -1492,7 +1493,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -1564,7 +1565,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -1583,7 +1584,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -1632,7 +1633,7 @@ fn live_handoff_keeps_shell_pane_after_foreground_process_exits() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -1650,7 +1651,7 @@ fn live_handoff_keeps_shell_pane_after_foreground_process_exits() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     cleanup_test_base(&base);
+ }
+@@ -1709,7 +1710,7 @@ fn live_handoff_preserves_python_http_server() {
+ 
+     assert_ok(request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+     ));
+     drop(spawned);
+     wait_for_api(&api_socket, Duration::from_secs(10));
+@@ -1721,7 +1722,7 @@ fn live_handoff_preserves_python_http_server() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     let _ = client_socket;
+     cleanup_test_base(&base);
+@@ -1795,7 +1796,7 @@ fn live_handoff_preserves_http_servers_across_multiple_sessions() {
+     for (_session_name, api_socket) in &sessions {
+         assert_ok(request(
+             api_socket,
+-            serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
++            serde_json::json!({"product":"herdl","id":"test:handoff","method":"server.live_handoff","params":{}}),
+         ));
+     }
+     drop(spawned);
+@@ -1814,7 +1815,7 @@ fn live_handoff_preserves_http_servers_across_multiple_sessions() {
+     for (_session_name, api_socket) in &sessions {
+         let _ = request(
+             api_socket,
+-            serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++            serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+         );
+     }
+     cleanup_test_base(&base);
+@@ -1895,7 +1896,7 @@ fn live_handoff_bad_expected_protocol_rolls_back_old_server() {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     drop(spawned);
+     cleanup_test_base(&base);
+@@ -1951,7 +1952,7 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
+ 
+     let failed = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:handoff-fail","method":"server.live_handoff","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:handoff-fail","method":"server.live_handoff","params":{}}),
+     );
+     assert!(
+         failed.get("error").is_some(),
+@@ -1977,7 +1978,7 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
+ 
+     let _ = request(
+         &api_socket,
+-        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
++        serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
+     );
+     drop(spawned);
+     cleanup_test_base(&base);
+diff --git a/tests/multi_client.rs b/tests/multi_client.rs
+index 90100265..30271aaa 100644
+--- a/tests/multi_client.rs
++++ b/tests/multi_client.rs
+@@ -151,6 +151,8 @@ fn cleanup(server: SpawnedHerdr, base: PathBuf) {
+ 
+ fn api_request(socket: &Path, request: &str) -> Value {
+     let mut stream = UnixStream::connect(socket).unwrap();
++    let mut request: Value = serde_json::from_str(request).unwrap();
++    request["product"] = serde_json::json!("herdl");
+     writeln!(stream, "{request}").unwrap();
+     let mut response = String::new();
+     BufReader::new(stream).read_line(&mut response).unwrap();
+@@ -160,7 +162,9 @@ fn api_request(socket: &Path, request: &str) -> Value {
+ fn create_pane(socket: &Path, label: &str) -> String {
+     let result = api_request(
+         socket,
+-        &format!(r#"{{"id":"create","method":"workspace.create","params":{{"label":"{label}"}}}}"#),
++        &format!(
++            r#"{{"product":"herdl","id":"create","method":"workspace.create","params":{{"label":"{label}"}}}}"#
++        ),
+     );
+     assert!(
+         result.get("error").is_none(),
+@@ -179,7 +183,7 @@ fn pane_input(socket: &Path, pane: &str, text: &str) {
+     let result = api_request(
+         socket,
+         &format!(
+-            r#"{{"id":"input","method":"pane.send_input","params":{{"pane_id":"{pane}","text":"{escaped}","keys":["Enter"]}}}}"#
++            r#"{{"product":"herdl","id":"input","method":"pane.send_input","params":{{"pane_id":"{pane}","text":"{escaped}","keys":["Enter"]}}}}"#
+         ),
+     );
+     assert!(
+@@ -192,7 +196,7 @@ fn pane_text(socket: &Path, pane: &str) -> String {
+     let result = api_request(
+         socket,
+         &format!(
+-            r#"{{"id":"read","method":"pane.read","params":{{"pane_id":"{pane}","source":"recent","lines":200}}}}"#
++            r#"{{"product":"herdl","id":"read","method":"pane.read","params":{{"pane_id":"{pane}","source":"recent","lines":200}}}}"#
+         ),
+     );
+     result
+@@ -363,7 +367,10 @@ fn crashed_client_shell_does_not_affect_survivor() {
+         libc::kill(pid as libc::pid_t, libc::SIGKILL);
+     }
+     drop(crashed);
+-    let response = api_request(&api, r#"{"id":"ping","method":"ping","params":{}}"#);
++    let response = api_request(
++        &api,
++        r#"{"product":"herdl","id":"ping","method":"ping","params":{}}"#,
++    );
+     assert!(response.to_string().contains("pong"));
+     pane_input(&api, &create_pane(&api, "survivor"), "printf 'survivor\\n'");
+     assert!(wait_for_message_variant(
+@@ -393,7 +400,10 @@ fn rapid_client_shell_connect_disconnect_remains_healthy() {
+     }
+     let final_client = shell(&clients, 100, 30);
+     drop(final_client);
+-    let response = api_request(&api, r#"{"id":"ping","method":"ping","params":{}}"#);
++    let response = api_request(
++        &api,
++        r#"{"product":"herdl","id":"ping","method":"ping","params":{}}"#,
++    );
+     assert!(response.to_string().contains("pong"));
+     cleanup(server, base);
+ }
+diff --git a/tests/server_headless.rs b/tests/server_headless.rs
+index 11801348..27c7f1e5 100644
+--- a/tests/server_headless.rs
++++ b/tests/server_headless.rs
+@@ -144,7 +144,7 @@ fn spawn_server(
+ fn ping_socket(socket_path: &Path) -> String {
+     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+ 
+-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
++    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
+     writeln!(stream, "{}", request).unwrap();
+ 
+     let mut reader = BufReader::new(stream);
+diff --git a/tests/support/mod.rs b/tests/support/mod.rs
+index 2107d50b..7374c981 100644
+--- a/tests/support/mod.rs
++++ b/tests/support/mod.rs
+@@ -13,7 +13,7 @@ static INIT: Once = Once::new();
+ static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
+ const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
+ const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
+-pub const CURRENT_PROTOCOL: u32 = 22;
++pub const CURRENT_PROTOCOL: u32 = 0x4844_4c00 | 22;
+ pub const CURRENT_ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
+ pub const SERVER_MESSAGE_SERVER_SHUTDOWN: u32 = 3;
+ pub const SERVER_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
+@@ -313,7 +313,10 @@ pub fn client_shell_handshake(
+     .to_string();
+     let hello_payload = encode_varint_enum(
+         CLIENT_MESSAGE_ENDPOINT_CONTROL,
+-        &[&encode_string("endpoint.hello.v1"), &encode_string(&data)],
++        &[
++            &encode_string("herdl.endpoint.hello.v1"),
++            &encode_string(&data),
++        ],
+     );
+     let response = read_handshake_response(stream, &hello_payload)?;
+     let mut offset = 0;
+@@ -325,8 +328,8 @@ pub fn client_shell_handshake(
+         ));
+     }
+     let kind = decode_string(&response, &mut offset)?;
+-    if kind != "endpoint.welcome.v1" {
+-        return Err(format!("expected endpoint.welcome.v1, got {kind}"));
++    if kind != "herdl.endpoint.welcome.v1" {
++        return Err(format!("expected herdl.endpoint.welcome.v1, got {kind}"));
+     }
+     let data = decode_string(&response, &mut offset)?;
+     let value: serde_json::Value = serde_json::from_str(&data).map_err(|err| err.to_string())?;

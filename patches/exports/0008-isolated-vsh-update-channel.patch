@@ -1,0 +1,1223 @@
+isolated-vsh-update-channel
+
+From: Victor Araújo <victor@victor-software-house.com>
+
+Downstream-Reason: Publish checksum-pinned VSH HerDL builds and enable only the isolated downstream update channel.
+Upstream-Status: inappropriate
+Drop-When: The HerDL downstream product is retired.
+---
+ .github/workflows/herdl-release.yml                |  241 ++++++++++++++++++++
+ .../website/src/content/docs/cli-reference.mdx     |   10 -
+ docs/next/website/src/content/docs/install.mdx     |   18 +
+ justfile                                           |    2 
+ scripts/herdl_release.py                           |  183 +++++++++++++++
+ scripts/test_herdl_release.py                      |  103 +++++++++
+ src/build_info.rs                                  |    9 +
+ src/config/model.rs                                |    4 
+ src/main.rs                                        |   10 -
+ src/remote/attach.rs                               |   79 ++++---
+ src/update.rs                                      |  176 ++++++++++-----
+ 11 files changed, 726 insertions(+), 109 deletions(-)
+ create mode 100644 .github/workflows/herdl-release.yml
+ create mode 100644 scripts/herdl_release.py
+ create mode 100644 scripts/test_herdl_release.py
+
+diff --git a/.github/workflows/herdl-release.yml b/.github/workflows/herdl-release.yml
+new file mode 100644
+index 00000000..86f5db88
+--- /dev/null
++++ b/.github/workflows/herdl-release.yml
+@@ -0,0 +1,241 @@
++name: Publish HerDL
++
++on:
++  workflow_dispatch:
++    inputs:
++      commit:
++        description: Optional master commit SHA to publish
++        required: false
++        type: string
++
++permissions:
++  contents: read
++
++env:
++  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
++  RUST_TOOLCHAIN_VERSION: 1.96.1
++
++concurrency:
++  group: herdl-release
++  cancel-in-progress: false
++
++jobs:
++  preflight:
++    if: github.repository == 'victor-software-house/herdr'
++    runs-on: ubuntu-latest
++    outputs:
++      commit: ${{ steps.plan.outputs.commit }}
++      build_id: ${{ steps.plan.outputs.build_id }}
++      base_version: ${{ steps.plan.outputs.base_version }}
++      identity: ${{ steps.plan.outputs.identity }}
++      tag: ${{ steps.plan.outputs.tag }}
++      built_at: ${{ steps.plan.outputs.built_at }}
++      protocol: ${{ steps.plan.outputs.protocol }}
++      endpoint_generation: ${{ steps.plan.outputs.endpoint_generation }}
++    steps:
++      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
++        with:
++          ref: master
++          fetch-depth: 0
++          persist-credentials: false
++
++      - name: Select downstream commit
++        id: plan
++        shell: bash
++        run: |
++          set -euo pipefail
++          git fetch origin master
++          requested='${{ github.event.inputs.commit || '' }}'
++          if [ -n "$requested" ]; then
++            commit="$(git rev-parse "$requested^{commit}")"
++          else
++            commit="$(git rev-parse origin/master)"
++          fi
++          if ! git merge-base --is-ancestor "$commit" origin/master; then
++            echo "error: requested commit $commit is not reachable from origin/master" >&2
++            exit 1
++          fi
++          git checkout --detach "$commit"
++          build_id="$(git rev-parse --short=12 HEAD)"
++          base_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
++          identity="$base_version-vsh.$build_id"
++          protocol="$(sed -n 's/^pub const PROTOCOL_VERSION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/wire.rs)"
++          endpoint_generation="$(sed -n 's/^pub const ENDPOINT_PROTOCOL_GENERATION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/endpoint.rs)"
++          {
++            echo "commit=$commit"
++            echo "build_id=$build_id"
++            echo "base_version=$base_version"
++            echo "identity=$identity"
++            echo "tag=v$identity"
++            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
++            echo "protocol=$protocol"
++            echo "endpoint_generation=$endpoint_generation"
++          } >> "$GITHUB_OUTPUT"
++
++  build:
++    needs: preflight
++    if: github.repository == 'victor-software-house/herdr'
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - target: x86_64-unknown-linux-musl
++            os: ubuntu-latest
++            name: herdl-linux-x86_64
++          - target: aarch64-unknown-linux-musl
++            os: ubuntu-latest
++            name: herdl-linux-aarch64
++          - target: aarch64-apple-darwin
++            os: macos-26
++            name: herdl-macos-aarch64
++    runs-on: ${{ matrix.os }}
++    env:
++      LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
++      LIBGHOSTTY_VT_SIMD: 'true'
++      HERDL_BUILD_CHANNEL: vsh
++      HERDL_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
++      HERDL_BUILD_COMMIT: ${{ needs.preflight.outputs.commit }}
++    steps:
++      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
++        with:
++          ref: ${{ needs.preflight.outputs.commit }}
++          persist-credentials: false
++
++      - name: Install Rust
++        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
++        with:
++          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
++          targets: ${{ matrix.target }}
++
++      - name: Install Zig
++        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
++        with:
++          version: 0.16.0
++
++      - name: Prefer official Ubuntu mirrors over Azure
++        if: runner.os == 'Linux'
++        run: |
++          if [ -f /etc/apt/apt-mirrors.txt ]; then
++            sudo sed -i '/azure.archive.ubuntu.com/d' /etc/apt/apt-mirrors.txt
++          fi
++
++      - name: Install Linux build tools
++        if: runner.os == 'Linux'
++        run: |
++          sudo find /etc/apt/sources.list.d -type f \( -iname '*microsoft*' -o -iname '*azure-cli*' \) -print -delete
++          sudo apt-get update
++          sudo apt-get install -y cmake ninja-build musl-tools gcc-aarch64-linux-gnu crossbuild-essential-arm64
++
++      - name: Install macOS build tools
++        if: runner.os == 'macOS'
++        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja
++
++      - name: Set Linux aarch64 linker
++        if: matrix.target == 'aarch64-unknown-linux-musl'
++        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
++
++      - name: Remove Zig caches
++        run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
++
++      - name: Build
++        run: cargo build --release --locked --target ${{ matrix.target }}
++
++      - name: Package and verify artifact
++        shell: bash
++        run: |
++          set -euo pipefail
++          cp target/${{ matrix.target }}/release/herdl '${{ matrix.name }}'
++          expected='herdl ${{ needs.preflight.outputs.identity }}'
++          if [ '${{ matrix.target }}' = 'aarch64-unknown-linux-musl' ]; then
++            strings '${{ matrix.name }}' | grep -F '${{ needs.preflight.outputs.base_version }}' >/dev/null
++            strings '${{ matrix.name }}' | grep -Fx 'vsh' >/dev/null
++            strings '${{ matrix.name }}' | grep -Fx '${{ needs.preflight.outputs.build_id }}' >/dev/null
++          else
++            actual="$(./'${{ matrix.name }}' --version)"
++            test "$actual" = "$expected"
++          fi
++          file '${{ matrix.name }}' > BUILD_INFO.txt
++          {
++            echo 'identity=${{ needs.preflight.outputs.identity }}'
++            echo 'commit=${{ needs.preflight.outputs.commit }}'
++            echo 'target=${{ matrix.target }}'
++            echo 'channel=vsh'
++          } >> BUILD_INFO.txt
++          if [ "${{ runner.os }}" = 'macOS' ]; then
++            shasum -a 256 '${{ matrix.name }}' > '${{ matrix.name }}.sha256'
++          else
++            sha256sum '${{ matrix.name }}' > '${{ matrix.name }}.sha256'
++          fi
++
++      - name: Upload artifact
++        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
++        with:
++          name: ${{ matrix.name }}
++          path: |
++            ${{ matrix.name }}
++            ${{ matrix.name }}.sha256
++            BUILD_INFO.txt
++
++  publish:
++    needs: [preflight, build]
++    if: github.repository == 'victor-software-house/herdr'
++    runs-on: ubuntu-latest
++    permissions:
++      contents: write
++    steps:
++      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
++        with:
++          ref: ${{ needs.preflight.outputs.commit }}
++          persist-credentials: false
++
++      - name: Download artifacts
++        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
++        with:
++          path: artifacts
++
++      - name: Prepare release notes and prior manifests
++        shell: bash
++        env:
++          RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
++          RELEASE_BASE_VERSION: ${{ needs.preflight.outputs.base_version }}
++        run: |
++          set -euo pipefail
++          printf '%s\n\n%s\n%s\n' \
++            '### Changed' \
++            '- Publish the VSH HerDL downstream build with isolated pane-owned terminal tabs.' \
++            "- Built from commit $RELEASE_COMMIT at upstream base v$RELEASE_BASE_VERSION." \
++            > RELEASE_NOTES.md
++          curl -sfL 'https://github.com/victor-software-house/herdr/releases/latest/download/latest.json' -o previous-latest.json || rm -f previous-latest.json
++          curl -sfL 'https://github.com/victor-software-house/herdr/releases/latest/download/preview.json' -o previous-preview.json || rm -f previous-preview.json
++
++      - name: Generate VSH manifests
++        run: |
++          python3 scripts/herdl_release.py manifest \
++            --base-version '${{ needs.preflight.outputs.base_version }}' \
++            --build-id '${{ needs.preflight.outputs.build_id }}' \
++            --commit '${{ needs.preflight.outputs.commit }}' \
++            --built-at '${{ needs.preflight.outputs.built_at }}' \
++            --protocol '${{ needs.preflight.outputs.protocol }}' \
++            --endpoint-generation '${{ needs.preflight.outputs.endpoint_generation }}' \
++            --notes RELEASE_NOTES.md \
++            --artifacts-dir artifacts \
++            --previous-latest previous-latest.json \
++            --previous-preview previous-preview.json \
++            --latest-output latest.json \
++            --preview-output preview.json
++
++      - name: Publish immutable VSH release
++        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
++        with:
++          tag_name: ${{ needs.preflight.outputs.tag }}
++          name: HerDL ${{ needs.preflight.outputs.identity }}
++          target_commitish: ${{ needs.preflight.outputs.commit }}
++          body_path: RELEASE_NOTES.md
++          prerelease: false
++          make_latest: true
++          files: |
++            artifacts/herdl-linux-x86_64/herdl-linux-x86_64
++            artifacts/herdl-linux-aarch64/herdl-linux-aarch64
++            artifacts/herdl-macos-aarch64/herdl-macos-aarch64
++            latest.json
++            preview.json
+diff --git a/docs/next/website/src/content/docs/cli-reference.mdx b/docs/next/website/src/content/docs/cli-reference.mdx
+index 3c6a0e65..d62b5d6c 100644
+--- a/docs/next/website/src/content/docs/cli-reference.mdx
++++ b/docs/next/website/src/content/docs/cli-reference.mdx
+@@ -13,12 +13,12 @@ Most commands print JSON responses for deterministic automation in scripts.
+ herdr                         # launch or attach to the default session
+ herdr --remote workbox        # attach through SSH, using local keybindings
+ herdr --default-config        # print default config
+-herdr update                  # download and install from the configured channel
++herdl update                  # install a checksum-pinned VSH HerDL build
+ herdr completion zsh          # generate a zsh completion script
+-herdr channel show            # print stable or preview
+-herdr channel set preview     # opt into preview builds
+-herdr channel set stable      # return a direct install to stable
+-herdr --version               # print version
++herdl channel show            # print stable or preview
++herdl channel set preview     # select the VSH preview manifest
++herdl channel set stable      # select the VSH stable manifest
++herdl --version               # print <base>-vsh.<commit>
+ ```
+ 
+ Optional launch and update settings:
+diff --git a/docs/next/website/src/content/docs/install.mdx b/docs/next/website/src/content/docs/install.mdx
+index c0c422a5..499f96e4 100644
+--- a/docs/next/website/src/content/docs/install.mdx
++++ b/docs/next/website/src/content/docs/install.mdx
+@@ -113,15 +113,15 @@ If your shell cannot find `herdr`, restart the terminal or check that the instal
+ 
+ ## Update
+ 
+-Herdr checks for new releases and notifies you in the app. You can update manually:
++HerDL checks the VSH-owned `victor-software-house/herdr` release channel and notifies you when a newer exact downstream build is available. Every build keeps the upstream base version and adds its provenance as `<base>-vsh.<commit>`. Update manually with:
+ 
+ ```bash
+-herdr update
++herdl update
+ ```
+ 
+-Use `herdr update` only for installs managed by Herdr's own installer. Update Homebrew, mise, and Nix installs through those package managers instead.
++Use `herdl update` only for standalone HerDL installs. Package-managed installations must update through their package manager. The updater accepts only checksum-pinned `herdl-*` assets from the VSH repository and replaces only the running `herdl` executable.
+ 
+-Direct installs on Linux, macOS, and Windows use the stable update channel by default. To opt into preview builds from `master`, set the channel:
++VSH direct releases provide Linux x86_64, Linux aarch64, and native macOS arm64 binaries. Windows artifacts are not published. The stable channel is the default. To select the separately addressed VSH preview manifest, run:
+ 
+ ```bash
+ herdr channel set preview
+@@ -135,11 +135,9 @@ herdr channel set stable
+ 
+ For direct installs, changing channels checks the selected channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
+ 
+-Preview builds are regularly published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
++The initial VSH publication points stable and preview at the same exact downstream build. Both manifests remain isolated from upstream Herdr releases.
+ 
+-Stable is the recommended channel for normal Windows use. Preview receives fixes sooner but can regress, so opt in only when you want that tradeoff. Existing Windows preview installs remain on preview until you switch them explicitly. If an older preview build rejects `herdr channel set stable`, run `herdr update` once on preview, then retry the channel switch.
+-
+-By default, `herdr update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start Herdr again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.
++By default, `herdl update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start HerDL again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.
+ 
+ To opt into experimental live server handoff for supported running sessions, run:
+ 
+@@ -147,8 +145,8 @@ To opt into experimental live server handoff for supported running sessions, run
+ herdr update --handoff
+ ```
+ 
+-Live handoff does not apply to Homebrew, mise, or Nix package-manager updates. For those installs, update with the package manager, then run Herdr again to reconnect with the updated client. The compatible old server keeps running. Restart it later with `herdr server stop` or `herdr session stop <name>` only when you want server-side changes from the new release.
++Live handoff does not apply to package-manager updates. For those installs, update with the package manager, then run HerDL again to reconnect with the updated client. The compatible old server keeps running. Restart it later with `herdr server stop` or `herdr session stop <name>` only when you want server-side changes from the new release.
+ 
+ ## Requirements
+ 
+-Stable-channel binaries are available for Linux, macOS, and Windows x86_64. See [Windows support](/docs/windows-beta/) for supported workflows and known limitations. Windows ARM64 runs the x86_64 build under Windows emulation.
++VSH HerDL binaries are available for Linux x86_64, Linux aarch64, and macOS arm64.
+diff --git a/justfile b/justfile
+index 87eef998..cd1bbe36 100644
+--- a/justfile
++++ b/justfile
+@@ -13,7 +13,7 @@ test:
+ 
+ # Run repository maintenance contract tests
+ maintenance-test:
+-    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_cross
++    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_herdl_release scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_cross
+ 
+ # Run one nextest filter, e.g. `just test-one codex_stale_working`
+ test-one filter:
+diff --git a/scripts/herdl_release.py b/scripts/herdl_release.py
+new file mode 100644
+index 00000000..e2198e48
+--- /dev/null
++++ b/scripts/herdl_release.py
+@@ -0,0 +1,183 @@
++#!/usr/bin/env python3
++"""Generate checksum-pinned manifests for VSH HerDL releases."""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++from pathlib import Path
++from typing import Any
++
++TARGETS = (
++    "linux-x86_64",
++    "linux-aarch64",
++    "macos-aarch64",
++)
++REPOSITORY = "victor-software-house/herdr"
++RELEASE_PREFIX = f"https://github.com/{REPOSITORY}/releases/download/"
++
++
++def load_optional_json(path: Path | None) -> dict[str, Any]:
++    if path is None or not path.exists():
++        return {}
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, dict):
++        raise ValueError(f"{path} must contain a JSON object")
++    return value
++
++
++def artifact_metadata(artifacts_dir: Path, tag: str) -> dict[str, dict[str, str]]:
++    assets: dict[str, dict[str, str]] = {}
++    for target in TARGETS:
++        filename = f"herdl-{target}"
++        artifact = artifacts_dir / filename / filename
++        checksum_file = artifacts_dir / filename / f"{filename}.sha256"
++        if not artifact.is_file() or not checksum_file.is_file():
++            raise ValueError(f"missing artifact or checksum for {target}")
++        fields = checksum_file.read_text(encoding="utf-8").split()
++        if len(fields) < 2 or fields[1].lstrip("*") != filename:
++            raise ValueError(f"invalid checksum file for {target}")
++        digest = fields[0].lower()
++        actual = hashlib.sha256(artifact.read_bytes()).hexdigest()
++        if digest != actual:
++            raise ValueError(f"checksum mismatch for {target}")
++        assets[target] = {
++            "url": f"{RELEASE_PREFIX}{tag}/{filename}",
++            "sha256": digest,
++        }
++    return assets
++
++
++def validate_identity(base_version: str, build_id: str, commit: str) -> str:
++    if len(build_id) != 12 or not commit.startswith(build_id):
++        raise ValueError("build id must be the commit's 12-character prefix")
++    if not all(character in "0123456789abcdef" for character in commit.lower()):
++        raise ValueError("commit must be hexadecimal")
++    return f"{base_version.removeprefix('v')}-vsh.{build_id}"
++
++
++def validate_assets(assets: dict[str, Any], tag: str) -> None:
++    if set(assets) != set(TARGETS):
++        raise ValueError(f"manifest targets must be exactly {', '.join(TARGETS)}")
++    for target, asset in assets.items():
++        if not isinstance(asset, dict):
++            raise ValueError(f"asset {target} must be an object")
++        expected = f"{RELEASE_PREFIX}{tag}/herdl-{target}"
++        if asset.get("url") != expected:
++            raise ValueError(f"asset {target} must use {expected}")
++        digest = asset.get("sha256")
++        if not isinstance(digest, str) or len(digest) != 64:
++            raise ValueError(f"asset {target} must have a SHA-256 digest")
++
++
++def retained(mapping: Any, key: str, value: dict[str, Any], limit: int) -> dict[str, Any]:
++    result = dict(mapping) if isinstance(mapping, dict) else {}
++    result[key] = value
++    keys = list(result)
++    for stale in keys[:-limit]:
++        result.pop(stale, None)
++    return result
++
++
++def generate_manifests(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
++    identity = validate_identity(args.base_version, args.build_id, args.commit)
++    tag = f"v{identity}"
++    assets = artifact_metadata(args.artifacts_dir, tag)
++    validate_assets(assets, tag)
++    notes = args.notes.read_text(encoding="utf-8").strip()
++    if not notes:
++        raise ValueError("release notes must not be empty")
++
++    current_release = {
++        "base_version": args.base_version.removeprefix("v"),
++        "identity": identity,
++        "build_id": args.build_id,
++        "commit": args.commit,
++        "built_at": args.built_at,
++        "protocol": args.protocol,
++        "endpoint_generation": args.endpoint_generation,
++        "notes": notes,
++        "assets": assets,
++    }
++
++    previous_latest = load_optional_json(args.previous_latest)
++    previous_releases = previous_latest.get("releases", {})
++    previous_identity = previous_latest.get("identity")
++    if isinstance(previous_identity, str) and previous_identity:
++        archived = {
++            key: previous_latest[key]
++            for key in current_release
++            if key in previous_latest
++        }
++        previous_releases = retained(previous_releases, previous_identity, archived, args.retain)
++    releases = retained(previous_releases, identity, current_release, args.retain)
++    latest = {
++        "schema_version": 1,
++        "channel": "stable",
++        "version": args.base_version.removeprefix("v"),
++        **current_release,
++        "releases": releases,
++    }
++
++    previous_preview = load_optional_json(args.previous_preview)
++    build = {
++        key: current_release[key]
++        for key in (
++            "base_version",
++            "identity",
++            "commit",
++            "built_at",
++            "protocol",
++            "endpoint_generation",
++            "assets",
++        )
++    }
++    builds = retained(previous_preview.get("builds", {}), args.build_id, build, args.retain)
++    preview = {
++        "schema_version": 1,
++        "channel": "preview",
++        **current_release,
++        "builds": builds,
++    }
++    return latest, preview
++
++
++def write_json(path: Path, value: dict[str, Any]) -> None:
++    path.write_text(json.dumps(value, indent=2, sort_keys=False) + "\n", encoding="utf-8")
++
++
++def manifest_command(args: argparse.Namespace) -> None:
++    latest, preview = generate_manifests(args)
++    write_json(args.latest_output, latest)
++    write_json(args.preview_output, preview)
++
++
++def parser() -> argparse.ArgumentParser:
++    result = argparse.ArgumentParser()
++    subcommands = result.add_subparsers(dest="command", required=True)
++    manifest = subcommands.add_parser("manifest")
++    manifest.add_argument("--base-version", required=True)
++    manifest.add_argument("--build-id", required=True)
++    manifest.add_argument("--commit", required=True)
++    manifest.add_argument("--built-at", required=True)
++    manifest.add_argument("--protocol", required=True, type=int)
++    manifest.add_argument("--endpoint-generation", required=True, type=int)
++    manifest.add_argument("--notes", required=True, type=Path)
++    manifest.add_argument("--artifacts-dir", required=True, type=Path)
++    manifest.add_argument("--previous-latest", type=Path)
++    manifest.add_argument("--previous-preview", type=Path)
++    manifest.add_argument("--latest-output", required=True, type=Path)
++    manifest.add_argument("--preview-output", required=True, type=Path)
++    manifest.add_argument("--retain", type=int, default=30)
++    manifest.set_defaults(run=manifest_command)
++    return result
++
++
++def main() -> None:
++    args = parser().parse_args()
++    args.run(args)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/test_herdl_release.py b/scripts/test_herdl_release.py
+new file mode 100644
+index 00000000..45f88968
+--- /dev/null
++++ b/scripts/test_herdl_release.py
+@@ -0,0 +1,103 @@
++import argparse
++import hashlib
++import json
++import tempfile
++import unittest
++from pathlib import Path
++
++from scripts import herdl_release
++
++
++class HerDLReleaseManifestTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name)
++        self.artifacts = self.root / "artifacts"
++        self.notes = self.root / "notes.md"
++        self.notes.write_text("### Changed\n- VSH build\n", encoding="utf-8")
++        for target in herdl_release.TARGETS:
++            filename = f"herdl-{target}"
++            directory = self.artifacts / filename
++            directory.mkdir(parents=True)
++            artifact = directory / filename
++            artifact.write_bytes(target.encode())
++            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
++            (directory / f"{filename}.sha256").write_text(
++                f"{digest}  {filename}\n", encoding="utf-8"
++            )
++
++    def tearDown(self):
++        self.temp.cleanup()
++
++    def args(self, **overrides):
++        values = {
++            "base_version": "0.9.0",
++            "build_id": "abcdef123456",
++            "commit": "abcdef1234567890abcdef1234567890abcdef12",
++            "built_at": "2026-09-13T12:00:00Z",
++            "protocol": 23,
++            "endpoint_generation": 1,
++            "notes": self.notes,
++            "artifacts_dir": self.artifacts,
++            "previous_latest": None,
++            "previous_preview": None,
++            "latest_output": self.root / "latest.json",
++            "preview_output": self.root / "preview.json",
++            "retain": 30,
++        }
++        values.update(overrides)
++        return argparse.Namespace(**values)
++
++    def test_manifests_publish_only_vsh_herdl_unix_assets(self):
++        latest, preview = herdl_release.generate_manifests(self.args())
++
++        self.assertEqual(latest["version"], "0.9.0")
++        self.assertEqual(latest["identity"], "0.9.0-vsh.abcdef123456")
++        self.assertEqual(preview["identity"], latest["identity"])
++        self.assertEqual(set(latest["assets"]), set(herdl_release.TARGETS))
++        self.assertNotIn("windows-x86_64", latest["assets"])
++        for target, asset in latest["assets"].items():
++            self.assertEqual(
++                asset["url"],
++                "https://github.com/victor-software-house/herdr/releases/"
++                f"download/v0.9.0-vsh.abcdef123456/herdl-{target}",
++            )
++            self.assertEqual(len(asset["sha256"]), 64)
++            self.assertNotIn("herdrdev/herdr", asset["url"])
++            self.assertFalse(asset["url"].endswith(f"herdr-{target}"))
++
++    def test_manifest_rejects_checksum_mismatch(self):
++        checksum = next(self.artifacts.glob("*/*.sha256"))
++        checksum.write_text("0" * 64 + "  " + checksum.stem + "\n", encoding="utf-8")
++
++        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
++            herdl_release.generate_manifests(self.args())
++
++    def test_manifest_retains_previous_exact_build(self):
++        first, first_preview = herdl_release.generate_manifests(self.args())
++        previous_latest = self.root / "previous-latest.json"
++        previous_preview = self.root / "previous-preview.json"
++        previous_latest.write_text(json.dumps(first), encoding="utf-8")
++        previous_preview.write_text(json.dumps(first_preview), encoding="utf-8")
++
++        latest, preview = herdl_release.generate_manifests(
++            self.args(
++                build_id="123456abcdef",
++                commit="123456abcdef7890123456789012345678901234",
++                previous_latest=previous_latest,
++                previous_preview=previous_preview,
++            )
++        )
++
++        self.assertIn("0.9.0-vsh.abcdef123456", latest["releases"])
++        self.assertIn("0.9.0-vsh.123456abcdef", latest["releases"])
++        self.assertIn("abcdef123456", preview["builds"])
++        self.assertIn("123456abcdef", preview["builds"])
++
++    def test_identity_must_match_commit_prefix(self):
++        with self.assertRaisesRegex(ValueError, "12-character prefix"):
++            herdl_release.generate_manifests(self.args(build_id="wrong"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/src/build_info.rs b/src/build_info.rs
+index b0fce435..b7b1c500 100644
+--- a/src/build_info.rs
++++ b/src/build_info.rs
+@@ -24,6 +24,10 @@ pub fn is_preview() -> bool {
+     channel() == "preview"
+ }
+ 
++pub fn is_vsh() -> bool {
++    channel() == "vsh"
++}
++
+ fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
+     value.and_then(|value| {
+         let trimmed = value.trim();
+@@ -41,4 +45,9 @@ mod tests {
+     fn stable_version_defaults_to_cargo_version() {
+         assert!(!super::version().is_empty());
+     }
++
++    #[test]
++    fn vsh_identity_is_distinct_from_upstream_channels() {
++        assert_eq!(super::is_vsh(), super::channel() == "vsh");
++    }
+ }
+diff --git a/src/config/model.rs b/src/config/model.rs
+index 8247554a..fca994bd 100644
+--- a/src/config/model.rs
++++ b/src/config/model.rs
+@@ -40,7 +40,7 @@ impl Default for UpdateConfig {
+     fn default() -> Self {
+         Self {
+             channel: default_update_channel(),
+-            version_check: false,
++            version_check: true,
+             manifest_check: false,
+         }
+     }
+@@ -1299,7 +1299,7 @@ mod tests {
+     fn update_config_defaults_and_parses() {
+         let default_config = Config::default();
+         assert_eq!(default_config.update.channel, default_update_channel());
+-        assert!(!default_config.update.version_check);
++        assert!(default_config.update.version_check);
+         assert!(!default_config.update.manifest_check);
+ 
+         let toml = r#"
+diff --git a/src/main.rs b/src/main.rs
+index 6a1ce474..9c24e87b 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -119,14 +119,14 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
+ # kitty_graphics = true
+ 
+ [update]
+-# Update channel used by background version checks and `herdl update`.
+-# HerDL update channels remain unavailable until the VSH release channel is published.
++# VSH HerDL update channel used by background version checks and `herdl update`.
++# Both channel names resolve only to checksum-pinned victor-software-house/herdr assets.
+ # channel = "stable"
+ 
+-# Automatic version checks are disabled until the VSH release channel is published.
+-# version_check = false
++# Check the VSH HerDL release channel automatically.
++# version_check = true
+ 
+-# Automatic manifest checks are disabled until the VSH catalog is published.
++# Automatic detection-manifest checks remain disabled until the VSH catalog is published.
+ # manifest_check = false
+ 
+ [keys]
+diff --git a/src/remote/attach.rs b/src/remote/attach.rs
+index ce9f67e1..ccd16ff6 100644
+--- a/src/remote/attach.rs
++++ b/src/remote/attach.rs
+@@ -34,6 +34,8 @@ const STABLE_UPDATE_MANIFEST_URL: &str =
+     "https://github.com/victor-software-house/herdr/releases/latest/download/latest.json";
+ const PREVIEW_UPDATE_MANIFEST_URL: &str =
+     "https://github.com/victor-software-house/herdr/releases/latest/download/preview.json";
++const VSH_RELEASE_DOWNLOAD_PREFIX: &str =
++    "https://github.com/victor-software-house/herdr/releases/download/";
+ const REMOTE_BINARY_ENV_VAR: &str = "HERDL_REMOTE_BINARY";
+ const REMOTE_OUTPUT_READY_MARKER: &str = "herdl-remote-output-ready:1";
+ const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
+@@ -402,7 +404,7 @@ impl RemoteAssetRef {
+ 
+ #[derive(Deserialize)]
+ struct RemoteUpdateManifest {
+-    version: String,
++    identity: Option<String>,
+     protocol: Option<u32>,
+     assets: BTreeMap<String, RemoteAssetRef>,
+     #[serde(default)]
+@@ -457,7 +459,7 @@ where
+ 
+ impl RemoteUpdateManifest {
+     fn release_for_version(&self, version: &str) -> Option<RemoteManifestReleaseRef<'_>> {
+-        if self.version.trim_start_matches('v') == version {
++        if self.identity.as_deref() == Some(version) {
+             return Some(RemoteManifestReleaseRef {
+                 protocol: self.protocol,
+                 assets: &self.assets,
+@@ -1893,16 +1895,7 @@ fn remote_shell_resolves_managed_install(stdout: &str) -> bool {
+         .is_some_and(|path| path.ends_with("/.local/bin/herdl"))
+ }
+ 
+-fn automatic_remote_downloads_are_enabled() -> bool {
+-    false
+-}
+-
+ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource> {
+-    if !automatic_remote_downloads_are_enabled() {
+-        return Err(io::Error::other(
+-            "automatic HerDL remote download is unavailable until the VSH release channel is published; set HERDL_REMOTE_BINARY to an explicit HerDL binary",
+-        ));
+-    }
+     let asset_key = platform.asset_key();
+     let asset = remote_release_asset(&asset_key)?;
+ 
+@@ -1951,11 +1944,28 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
+     Ok(output.stdout)
+ }
+ 
+-fn remote_asset_info(asset: &RemoteAssetRef) -> RemoteReleaseAsset {
+-    RemoteReleaseAsset {
+-        url: asset.url().to_string(),
+-        sha256: asset.sha256().map(str::to_string),
++fn remote_asset_info(asset_key: &str, asset: &RemoteAssetRef) -> io::Result<RemoteReleaseAsset> {
++    let url = asset.url();
++    let Some(release_path) = url.strip_prefix(VSH_RELEASE_DOWNLOAD_PREFIX) else {
++        return Err(io::Error::other(format!(
++            "release manifest asset {asset_key} is not hosted by victor-software-house/herdr"
++        )));
++    };
++    let Some((tag, filename)) = release_path.split_once('/') else {
++        return Err(io::Error::other(format!(
++            "release manifest asset {asset_key} URL is invalid"
++        )));
++    };
++    let expected_filename = format!("herdl-{asset_key}");
++    if tag.is_empty() || filename != expected_filename {
++        return Err(io::Error::other(format!(
++            "release manifest asset {asset_key} must end with {expected_filename}"
++        )));
+     }
++    Ok(RemoteReleaseAsset {
++        url: url.to_string(),
++        sha256: asset.sha256().map(str::to_string),
++    })
+ }
+ 
+ fn preview_assets_for_build<'a>(
+@@ -1989,11 +1999,12 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+                 "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdl or install a matching HerDL on the remote host manually"
+             )));
+         }
+-        return assets.get(asset_key).map(remote_asset_info).ok_or_else(|| {
++        let asset = assets.get(asset_key).ok_or_else(|| {
+             io::Error::other(format!(
+                 "no {asset_key} binary in the preview manifest for build {build_id}"
+             ))
+-        });
++        })?;
++        return remote_asset_info(asset_key, asset);
+     }
+ 
+     let current_version = current_version();
+@@ -2018,7 +2029,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
+             "no {asset_key} binary in the release manifest for herdl {current_version}"
+         ))
+     })?;
+-    let mut asset = remote_asset_info(asset);
++    let mut asset = remote_asset_info(asset_key, asset)?;
+     asset.sha256 = asset
+         .sha256
+         .or_else(|| release.sha256.get(asset_key).cloned());
+@@ -4142,6 +4153,7 @@ mod tests {
+         let manifest: RemoteUpdateManifest = serde_json::from_str(
+             r#"{
+                 "version": "1.2.3",
++                "identity": "1.2.3-vsh.abcdef123456",
+                 "assets": {
+                     "linux-x86_64": "https://example.com/latest"
+                 },
+@@ -4159,7 +4171,9 @@ mod tests {
+         )
+         .unwrap();
+ 
+-        let release = manifest.release_for_version("1.2.3").unwrap();
++        let release = manifest
++            .release_for_version("1.2.3-vsh.abcdef123456")
++            .unwrap();
+         assert_eq!(
+             release.assets.get("linux-x86_64").map(RemoteAssetRef::url),
+             Some("https://example.com/latest")
+@@ -4313,18 +4327,23 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn automatic_remote_download_fails_before_selecting_an_asset() {
+-        let platform = RemotePlatform {
+-            os: "linux",
+-            arch: "aarch64",
+-        };
+-        let error = match download_release_asset(&platform) {
+-            Ok(_) => panic!("automatic remote download unexpectedly succeeded"),
+-            Err(error) => error,
++    fn automatic_remote_download_uses_only_vsh_herdl_assets() {
++        let vsh = RemoteAssetRef::Object {
++            url: "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdl-linux-aarch64".into(),
++            sha256: Some("a".repeat(64)),
+         };
+-        assert!(error
+-            .to_string()
+-            .contains("automatic HerDL remote download is unavailable"));
++        assert!(remote_asset_info("linux-aarch64", &vsh).is_ok());
++
++        for url in [
++            "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-linux-aarch64",
++            "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdr-linux-aarch64",
++        ] {
++            let foreign = RemoteAssetRef::Object {
++                url: url.into(),
++                sha256: Some("a".repeat(64)),
++            };
++            assert!(remote_asset_info("linux-aarch64", &foreign).is_err());
++        }
+     }
+ 
+     #[test]
+diff --git a/src/update.rs b/src/update.rs
+index 07dafc7e..b50fc5a3 100644
+--- a/src/update.rs
++++ b/src/update.rs
+@@ -1,7 +1,6 @@
+ //! Self-update mechanism.
+ //!
+-//! HerDL update support, disabled until the VSH release channel is published.
+-//! Manual and background checks fail closed before selecting a release asset.
++//! HerDL updates use checksum-pinned assets from the VSH-owned release channel.
+ //! Uses `curl` as a subprocess for HTTP — no additional Rust HTTP dependencies.
+ //! JSON parsing uses serde_json (already in deps for persistence).
+ 
+@@ -25,6 +24,8 @@ const STABLE_UPDATE_MANIFEST_URL: &str =
+     "https://github.com/victor-software-house/herdr/releases/latest/download/latest.json";
+ const PREVIEW_UPDATE_MANIFEST_URL: &str =
+     "https://github.com/victor-software-house/herdr/releases/latest/download/preview.json";
++const VSH_RELEASE_DOWNLOAD_PREFIX: &str =
++    "https://github.com/victor-software-house/herdr/releases/download/";
+ const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdl.json";
+ const HERDR_UPDATE_COMMAND: &str = "herdl update";
+ const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdl";
+@@ -198,6 +199,9 @@ impl AssetRef {
+ #[derive(Deserialize)]
+ struct UpdateManifest {
+     version: String,
++    identity: Option<String>,
++    build_id: Option<String>,
++    commit: Option<String>,
+     #[cfg(not(windows))]
+     endpoint_generation: Option<u32>,
+     /// Thin-client protocol spoken by this release, when advertised by the manifest.
+@@ -382,19 +386,79 @@ fn handle_manifest_announcement(version: &str, value: Option<&serde_json::Value>
+     }
+ }
+ 
++fn vsh_release_identity(
++    base_version: &str,
++    identity: Option<&str>,
++    build_id: Option<&str>,
++    commit: Option<&str>,
++) -> Result<(String, String, String), String> {
++    let base_version = base_version.trim_start_matches('v');
++    let identity = identity
++        .map(str::trim)
++        .filter(|value| !value.is_empty())
++        .ok_or("VSH update manifest identity is missing")?;
++    let build_id = build_id
++        .map(str::trim)
++        .filter(|value| !value.is_empty())
++        .ok_or("VSH update manifest build_id is missing")?;
++    let commit = commit
++        .map(str::trim)
++        .filter(|value| !value.is_empty())
++        .ok_or("VSH update manifest commit is missing")?;
++    let expected = format!("{base_version}-vsh.{build_id}");
++    if identity != expected {
++        return Err(format!(
++            "VSH update manifest identity {identity} does not match {expected}"
++        ));
++    }
++    if build_id.len() != 12 || !commit.starts_with(build_id) {
++        return Err("VSH update manifest build_id must be the commit's 12-character prefix".into());
++    }
++    Ok((
++        identity.to_string(),
++        build_id.to_string(),
++        commit.to_string(),
++    ))
++}
++
++fn validate_vsh_asset_url(asset_key: &str, url: &str) -> Result<(), String> {
++    let Some(release_path) = url.strip_prefix(VSH_RELEASE_DOWNLOAD_PREFIX) else {
++        return Err(format!(
++            "update manifest asset {asset_key} is not hosted by victor-software-house/herdr"
++        ));
++    };
++    let Some((tag, filename)) = release_path.split_once('/') else {
++        return Err(format!("update manifest asset {asset_key} URL is invalid"));
++    };
++    let expected_filename = if asset_key.starts_with("windows-") {
++        format!("herdl-{asset_key}.zip")
++    } else {
++        format!("herdl-{asset_key}")
++    };
++    if tag.is_empty() || filename != expected_filename {
++        return Err(format!(
++            "update manifest asset {asset_key} must end with {expected_filename}"
++        ));
++    }
++    Ok(())
++}
++
+ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<ReleaseInfo>, String> {
+     let current = Version::current();
+     let latest = Version::parse(&manifest.version)
+         .ok_or_else(|| format!("invalid version in update manifest: {}", manifest.version))?;
+-
+-    if !stable_channel_should_install(&latest, &current, crate::build_info::is_preview()) {
+-        return Ok(None); // up to date
++    let (identity, build_id, commit) = vsh_release_identity(
++        &manifest.version,
++        manifest.identity.as_deref(),
++        manifest.build_id.as_deref(),
++        manifest.commit.as_deref(),
++    )?;
++
++    if !stable_channel_should_install(&latest, &current, &identity, &crate::build_info::version()) {
++        return Ok(None);
+     }
+ 
+-    let metadata = manifest
+-        .metadata_for_version(&latest)
+-        .ok_or_else(|| format!("missing release metadata for v{latest}"))?;
+-    let notes_body = metadata.notes_body();
++    let notes_body = manifest.notes.trim().to_string();
+     if notes_body.is_empty() {
+         return Err("update manifest notes are empty".into());
+     }
+@@ -405,6 +469,7 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
+         .assets
+         .get(&asset_key)
+         .ok_or_else(|| format!("no binary for {asset_key} in update manifest"))?;
++    validate_vsh_asset_url(&asset_key, &asset.url)?;
+     let download_url = asset.url.clone();
+     let sha256 = asset
+         .sha256
+@@ -415,11 +480,11 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
+         })?;
+ 
+     Ok(Some(ReleaseInfo {
+-        identity: latest.to_string(),
++        identity,
+         version: latest,
+         channel: UpdateChannel::Stable,
+-        build_id: None,
+-        commit: None,
++        build_id: Some(build_id),
++        commit: Some(commit),
+         #[cfg(not(windows))]
+         target_protocol: manifest.protocol,
+         #[cfg(not(windows))]
+@@ -435,17 +500,14 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
+ fn stable_channel_should_install(
+     latest: &Version,
+     current: &Version,
+-    installed_is_preview: bool,
++    latest_identity: &str,
++    current_identity: &str,
+ ) -> bool {
+-    installed_is_preview || latest > current
++    latest > current || (latest == current && latest_identity != current_identity)
+ }
+ 
+ fn preview_display_version(base_version: &str, build_id: &str) -> String {
+-    format!(
+-        "{}-preview.{}",
+-        base_version.trim_start_matches('v'),
+-        build_id
+-    )
++    format!("{}-vsh.{}", base_version.trim_start_matches('v'), build_id)
+ }
+ 
+ fn release_info_from_preview_manifest(
+@@ -461,7 +523,7 @@ fn release_info_from_preview_manifest(
+     if build_id.is_empty() {
+         return Err("preview manifest build_id is empty".into());
+     }
+-    if crate::build_info::is_preview()
++    if crate::build_info::is_vsh()
+         && crate::build_info::build_id().is_some_and(|current| current == build_id)
+     {
+         return Ok(None);
+@@ -502,6 +564,7 @@ fn release_info_from_preview_manifest(
+                 .and_then(|build| build.assets.get(&asset_key))
+         })
+         .ok_or_else(|| format!("no binary for {asset_key} in preview manifest"))?;
++    validate_vsh_asset_url(&asset_key, &asset.url)?;
+     let download_url = asset.url.clone();
+ 
+     Ok(Some(ReleaseInfo {
+@@ -2110,17 +2173,8 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
+ // Public API
+ // ---------------------------------------------------------------------------
+ 
+-fn herdl_update_channel_is_published() -> bool {
+-    false
+-}
+-
+ /// Manual self-update command (`herdl update`).
+ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+-    if !herdl_update_channel_is_published() {
+-        return Err(
+-            "HerDL self-update is unavailable until the VSH release channel is published".into(),
+-        );
+-    }
+     let channel = UpdateChannel::configured();
+ 
+     if is_homebrew_managed_install() {
+@@ -2275,16 +2329,6 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+         return;
+     }
+ 
+-    if !herdl_update_channel_is_published() {
+-        tracing::info!(
+-            event = "update.check.complete",
+-            subsystem = "update",
+-            outcome = "disabled_until_vsh_channel",
+-            "automatic update check disabled"
+-        );
+-        return;
+-    }
+-
+     let configured_channel = UpdateChannel::configured();
+     if is_homebrew_managed_install() {
+         if configured_channel == UpdateChannel::Preview {
+@@ -2818,15 +2862,6 @@ mod tests {
+         assert!(!running_inside_herdr_env(Some("0")));
+     }
+ 
+-    #[test]
+-    fn self_update_fails_before_selecting_a_release_channel() {
+-        let error = self_update(SelfUpdateOptions::default()).unwrap_err();
+-        assert_eq!(
+-            error,
+-            "HerDL self-update is unavailable until the VSH release channel is published"
+-        );
+-    }
+-
+     #[test]
+     fn self_update_args_gate_live_handoff() {
+         assert_eq!(
+@@ -3602,9 +3637,12 @@ mod tests {
+         let json = format!(
+             r####"{{
+                 "version": "99.99.99",
++                "identity": "99.99.99-vsh.abcdef123456",
++                "build_id": "abcdef123456",
++                "commit": "abcdef1234567890",
+                 "notes": "### Changed\n- One",
+                 "assets": {{
+-                    "{asset_key}": "https://example.com/herdl"
++                    "{asset_key}": "https://github.com/victor-software-house/herdr/releases/download/v99.99.99-vsh.abcdef123456/herdl-{asset_key}"
+                 }}
+             }}"####
+         );
+@@ -3615,6 +3653,25 @@ mod tests {
+             .contains("missing a SHA-256 checksum"));
+     }
+ 
++    #[test]
++    fn update_manifest_rejects_foreign_or_upstream_assets() {
++        for url in [
++            "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-linux-aarch64",
++            "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdr-linux-aarch64",
++        ] {
++            let error = validate_vsh_asset_url("linux-aarch64", url).unwrap_err();
++            assert!(
++                error.contains("victor-software-house/herdr")
++                    || error.contains("herdl-linux-aarch64")
++            );
++        }
++        assert!(validate_vsh_asset_url(
++            "linux-aarch64",
++            "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdl-linux-aarch64"
++        )
++        .is_ok());
++    }
++
+     #[test]
+     fn invalid_manifest_announcement_does_not_block_release_info() {
+         let (os, arch) = platform_target();
+@@ -3622,6 +3679,9 @@ mod tests {
+         let json = format!(
+             r####"{{
+                 "version": "99.99.99",
++                "identity": "99.99.99-vsh.abcdef123456",
++                "build_id": "abcdef123456",
++                "commit": "abcdef1234567890",
+                 "protocol": 4,
+                 "notes": "### Changed\n- One",
+                 "announcement": {{
+@@ -3631,7 +3691,7 @@ mod tests {
+                 }},
+                 "assets": {{
+                     "{asset_key}": {{
+-                        "url": "https://example.com/herdl",
++                        "url": "https://github.com/victor-software-house/herdr/releases/download/v99.99.99-vsh.abcdef123456/herdl-{asset_key}",
+                         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                     }}
+                 }}
+@@ -3645,22 +3705,26 @@ mod tests {
+             .expect("release info");
+ 
+         assert_eq!(release.version, Version::parse("99.99.99").unwrap());
+-        assert_eq!(release.download_url, "https://example.com/herdl");
++        assert!(release
++            .download_url
++            .starts_with(VSH_RELEASE_DOWNLOAD_PREFIX));
+     }
+ 
+     #[test]
+-    fn stable_channel_installs_stable_asset_when_current_binary_is_preview() {
++    fn stable_channel_tracks_exact_vsh_identity_at_the_upstream_base_version() {
+         let latest_stable = Version::parse("0.6.6").unwrap();
+         let installed_base = Version::parse("0.6.6").unwrap();
+         assert!(stable_channel_should_install(
+             &latest_stable,
+             &installed_base,
+-            true
++            "0.6.6-vsh.abcdef123456",
++            "0.6.6-vsh.111111111111",
+         ));
+         assert!(!stable_channel_should_install(
+             &latest_stable,
+             &installed_base,
+-            false
++            "0.6.6-vsh.abcdef123456",
++            "0.6.6-vsh.abcdef123456",
+         ));
+     }
+ 
+@@ -3679,7 +3743,7 @@ mod tests {
+                 "notes": "### Fixed\n- One",
+                 "assets": {{
+                     "{asset_key}": {{
+-                        "url": "https://example.com/herdl-linux-x86_64",
++                        "url": "https://github.com/victor-software-house/herdr/releases/download/v9.9.9-vsh.2026-06-02-abcdef123456/herdl-{asset_key}",
+                         "sha256": "deadbeef"
+                     }}
+                 }},
+@@ -3706,7 +3770,7 @@ mod tests {
+             .expect("preview update");
+ 
+         assert_eq!(release.channel, UpdateChannel::Preview);
+-        assert_eq!(release.identity, "9.9.9-preview.2026-06-02-abcdef123456");
++        assert_eq!(release.identity, "9.9.9-vsh.2026-06-02-abcdef123456");
+         assert_eq!(release.target_protocol, Some(77));
+         assert_eq!(release.sha256.as_deref(), Some("deadbeef"));
+     }

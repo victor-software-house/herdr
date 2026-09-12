@@ -146,7 +146,7 @@ fn spawn_server_with_config(
 fn ping_socket(socket_path: &PathBuf) -> String {
     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
 
-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
+    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
     writeln!(stream, "{}", request).unwrap();
 
     let mut reader = BufReader::new(stream);
@@ -157,6 +157,8 @@ fn ping_socket(socket_path: &PathBuf) -> String {
 
 fn send_json_request(socket_path: &PathBuf, request: &str) -> Value {
     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+    let mut request: Value = serde_json::from_str(request).unwrap();
+    request["product"] = serde_json::json!("herdl");
     writeln!(stream, "{}", request).unwrap();
 
     let mut reader = BufReader::new(stream);
@@ -169,7 +171,7 @@ fn workspace_create(socket_path: &PathBuf, label: &str) -> Value {
     send_json_request(
         socket_path,
         &format!(
-            r#"{{"id":"workspace_create","method":"workspace.create","params":{{"label":"{label}"}}}}"#
+            r#"{{"product":"herdl","id":"workspace_create","method":"workspace.create","params":{{"label":"{label}"}}}}"#
         ),
     )
 }
@@ -177,7 +179,7 @@ fn workspace_create(socket_path: &PathBuf, label: &str) -> Value {
 fn workspace_list(socket_path: &PathBuf) -> Value {
     send_json_request(
         socket_path,
-        r#"{"id":"workspace_list","method":"workspace.list","params":{}}"#,
+        r#"{"product":"herdl","id":"workspace_list","method":"workspace.list","params":{}}"#,
     )
 }
 
@@ -185,7 +187,7 @@ fn pane_list(socket_path: &PathBuf, workspace_id: &str) -> Value {
     send_json_request(
         socket_path,
         &format!(
-            r#"{{"id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
+            r#"{{"product":"herdl","id":"pane_list","method":"pane.list","params":{{"workspace_id":"{workspace_id}"}}}}"#
         ),
     )
 }
@@ -194,7 +196,7 @@ fn pane_read_recent(socket_path: &PathBuf, pane_id: &str) -> Value {
     send_json_request(
         socket_path,
         &format!(
-            r#"{{"id":"pane_read","method":"pane.read","params":{{"pane_id":"{pane_id}","source":"recent"}}}}"#
+            r#"{{"product":"herdl","id":"pane_read","method":"pane.read","params":{{"pane_id":"{pane_id}","source":"recent"}}}}"#
         ),
     )
 }
@@ -210,7 +212,7 @@ fn pane_send_text(socket_path: &PathBuf, pane_id: &str, text: &str) -> Value {
     send_json_request(
         socket_path,
         &format!(
-            r#"{{"id":"pane_send_text","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":{}}}}}"#,
+            r#"{{"product":"herdl","id":"pane_send_text","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":{}}}}}"#,
             serde_json::to_string(text).unwrap()
         ),
     )
@@ -371,7 +373,7 @@ fn reattach_after_detach_shows_current_state() {
 
     // Create a workspace via API while client A is attached.
     let mut ws_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let request = r#"{"id":"1","method":"workspace.create","params":{"label":"reattach-test"}}"#;
+    let request = r#"{"product":"herdl","id":"1","method":"workspace.create","params":{"label":"reattach-test"}}"#;
     writeln!(ws_stream, "{}", request).unwrap();
     let mut reader = BufReader::new(ws_stream);
     let mut ws_response = String::new();
@@ -416,7 +418,7 @@ fn reattach_after_detach_shows_current_state() {
 
     // Verify the workspace still exists via API.
     let mut list_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let list_request = r#"{"id":"2","method":"workspace.list","params":{}}"#;
+    let list_request = r#"{"product":"herdl","id":"2","method":"workspace.list","params":{}}"#;
     writeln!(list_stream, "{}", list_request).unwrap();
     let mut list_reader = BufReader::new(list_stream);
     let mut list_response = String::new();
@@ -805,7 +807,7 @@ fn output_accumulated_while_detached_visible_on_reattach() {
     // Send text to the pane via API while detached.
     let mut send_stream = UnixStream::connect(&api_socket).expect("connect to API");
     let send_request = format!(
-        r#"{{"id":"4","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":"echo DURING_DETACH\n"}}}}"#
+        r#"{{"product":"herdl","id":"4","method":"pane.send_text","params":{{"pane_id":"{pane_id}","text":"echo DURING_DETACH\n"}}}}"#
     );
     writeln!(send_stream, "{}", send_request).unwrap();
     let mut send_reader = BufReader::new(send_stream);

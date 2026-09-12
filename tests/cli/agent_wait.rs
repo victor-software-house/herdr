@@ -13,7 +13,7 @@ fn agent_wait_exits_immediately_when_status_already_matches() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_immediate_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_immediate_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -26,7 +26,7 @@ fn agent_wait_exits_immediately_when_status_already_matches() {
     let reported = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_immediate_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"idle"}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_immediate_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"idle"}}}}"#,
             pane_id
         ),
     );
@@ -69,7 +69,7 @@ fn agent_wait_times_out_when_status_does_not_match() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_timeout_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_timeout_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -78,7 +78,7 @@ fn agent_wait_times_out_when_status_does_not_match() {
     let reported = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_timeout_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"working"}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_timeout_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:test","agent":"pi","state":"working"}}}}"#,
             pane_id
         ),
     );
@@ -143,7 +143,7 @@ fn agent_wait_exits_when_done_status_matches() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -155,7 +155,7 @@ fn agent_wait_exits_when_done_status_matches() {
     let tab_created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
             workspace_id
         ),
     );

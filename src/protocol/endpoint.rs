@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use super::{ClientShellSnapshot, ClientSurfaceSize, ServerMessage};
 
 pub const ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
-pub const ENDPOINT_HELLO_KIND: &str = "endpoint.hello.v1";
-pub const ENDPOINT_WELCOME_KIND: &str = "endpoint.welcome.v1";
+pub const ENDPOINT_HELLO_KIND: &str = "herdl.endpoint.hello.v1";
+pub const ENDPOINT_WELCOME_KIND: &str = "herdl.endpoint.welcome.v1";
 pub const SNAPSHOT_CODEC_V1: &str = "shell.snapshot.v1";
 pub const ENDPOINT_SNAPSHOT_KIND: &str = SNAPSHOT_CODEC_V1;
 pub const SURFACE_CODEC_V1: &str = "shell.surface.v1";
@@ -185,6 +185,12 @@ mod tests {
             agents: Vec::new(),
             commands: Vec::new(),
         }
+    }
+
+    #[test]
+    fn herdl_endpoint_handshake_kinds_are_disjoint_from_official_herdr() {
+        assert_ne!(ENDPOINT_HELLO_KIND, "endpoint.hello.v1");
+        assert_ne!(ENDPOINT_WELCOME_KIND, "endpoint.welcome.v1");
     }
 
     #[test]

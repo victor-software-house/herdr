@@ -110,7 +110,7 @@ fn pane_run_read_and_wait_commands_work() {
     send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -522,7 +522,7 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_env_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_env_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -580,7 +580,7 @@ fn pane_agent_reports_accept_options_before_pane() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_agent_report_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_agent_report_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );

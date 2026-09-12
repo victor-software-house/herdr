@@ -37,7 +37,7 @@ fn agent_wait_accepts_repeated_until_and_exits_when_one_status_matches() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_cli_2","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_cli_2","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );

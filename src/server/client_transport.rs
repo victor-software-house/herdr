@@ -1729,6 +1729,88 @@ mod tests {
     }
 
     #[test]
+    fn handshake_rejects_official_herdr_private_protocol() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-handshake-official-herdr");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(1);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handshake_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 41, &server_event_tx, &handshake_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::TerminalHello {
+                version: 22,
+                cols: 80,
+                rows: 24,
+                cell_width_px: 8,
+                cell_height_px: 16,
+                pixel_mouse: false,
+            },
+        )
+        .expect("write official hello");
+
+        let welcome: ServerMessage =
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read rejection");
+        assert!(matches!(
+            welcome,
+            ServerMessage::Welcome {
+                version: PROTOCOL_VERSION,
+                error: Some(_),
+                ..
+            }
+        ));
+        assert!(server_event_rx.try_recv().is_err());
+
+        drop(client_stream);
+        should_quit.store(true, Ordering::Release);
+        handle
+            .join()
+            .expect("handshake thread join")
+            .expect("handshake thread result");
+    }
+
+    #[test]
+    fn handshake_rejects_official_herdr_endpoint_kind() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-endpoint-official-herdr");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(1);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handshake_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 42, &server_event_tx, &handshake_quit)
+        });
+        let ClientMessage::EndpointControl { data, .. } = endpoint_hello(80, 24) else {
+            unreachable!();
+        };
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::EndpointControl {
+                kind: "endpoint.hello.v1".into(),
+                data,
+            },
+        )
+        .expect("write official endpoint hello");
+
+        let welcome: ServerMessage =
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read rejection");
+        assert!(matches!(
+            welcome,
+            ServerMessage::Welcome { error: Some(_), .. }
+        ));
+        assert!(server_event_rx.try_recv().is_err());
+
+        drop(client_stream);
+        should_quit.store(true, Ordering::Release);
+        handle
+            .join()
+            .expect("handshake thread join")
+            .expect("handshake thread result");
+    }
+
+    #[test]
     fn handshake_negotiates_terminal_ansi_encoding() {
         let (mut client_stream, server_stream, _path) = local_stream_pair("client-handshake-ansi");
         let (server_event_tx, mut server_event_rx) = mpsc::channel(4);

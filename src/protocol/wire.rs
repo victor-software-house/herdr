@@ -1,4 +1,4 @@
-//! Wire protocol for herdr server/client communication.
+//! Private wire protocol for HerDL server/client communication.
 //!
 //! Defines the message types, framing, version negotiation, and safety
 //! constraints for the binary protocol over local sockets.
@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 // Protocol constants
 // ---------------------------------------------------------------------------
 
-/// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 22;
+/// Current HerDL private protocol. The high bytes prevent cross-product handshakes.
+pub const PROTOCOL_VERSION: u32 = 1212435478;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -3124,6 +3124,12 @@ mod tests {
     }
 
     // ---- Version negotiation ----
+
+    #[test]
+    fn herdl_private_protocol_uses_a_disjoint_product_namespace() {
+        assert_ne!(PROTOCOL_VERSION, 22);
+        assert_eq!(PROTOCOL_VERSION & 0xffff_ff00, 0x4844_4c00);
+    }
 
     #[test]
     fn version_compatible() {

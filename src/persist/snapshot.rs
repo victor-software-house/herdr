@@ -1113,12 +1113,12 @@ mod tests {
             crate::detect::AgentState::Idle,
         );
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:pi".into(),
+            source: "herdl:pi".into(),
             agent: "pi".into(),
             session_ref: crate::agent_resume::AgentSessionRef::path(session_path.clone()).unwrap(),
         });
         terminal.set_hook_authority_with_session_ref(
-            "herdr:pi".into(),
+            "herdl:pi".into(),
             "pi".into(),
             crate::detect::AgentState::Working,
             None,
@@ -1132,7 +1132,7 @@ mod tests {
             .as_ref()
             .expect("agent session should be captured");
 
-        assert_eq!(agent_session.source, "herdr:pi");
+        assert_eq!(agent_session.source, "herdl:pi");
         assert_eq!(agent_session.agent, "pi");
         assert_eq!(
             agent_session.kind,
@@ -1154,7 +1154,7 @@ mod tests {
             .get_mut(&terminal_id)
             .unwrap()
             .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-                source: "herdr:opencode".into(),
+                source: "herdl:opencode".into(),
                 agent: "opencode".into(),
                 session_ref: crate::agent_resume::AgentSessionRef::id("opencode-session").unwrap(),
             });
@@ -1165,7 +1165,7 @@ mod tests {
             .as_ref()
             .expect("persisted agent session should be captured");
 
-        assert_eq!(agent_session.source, "herdr:opencode");
+        assert_eq!(agent_session.source, "herdl:opencode");
         assert_eq!(agent_session.agent, "opencode");
         assert_eq!(
             agent_session.kind,

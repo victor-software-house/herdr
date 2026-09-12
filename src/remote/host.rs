@@ -11,7 +11,7 @@ pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
         io::Error::new(
             err.kind(),
             format!(
-                "failed to connect to remote Herdr client socket {}: {err}",
+                "failed to connect to remote HerDL client socket {}: {err}",
                 socket_path.display()
             ),
         )
@@ -37,7 +37,7 @@ fn ensure_remote_server_running() -> io::Result<()> {
             return Ok(());
         }
         return Err(io::Error::other(
-            "remote herdr server needs one final update before this bridge can attach; rerun `herdr --remote` from an interactive terminal to approve it",
+            "remote herdl server needs one final update before this bridge can attach; rerun `herdl --remote` from an interactive terminal to approve it",
         ));
     }
 

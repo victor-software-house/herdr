@@ -66,12 +66,16 @@ local files:
 
 - `vendor/libghostty-vt/pkg/wuffs/build.zig`
 - `vendor/libghostty-vt/pkg/wuffs/src/main.zig`
+- `vendor/libghostty-vt/src/build/Config.zig`
+- `vendor/libghostty-vt/src/build/GhosttyLibVt.zig`
+- `vendor/libghostty-vt/src/build/GhosttyZig.zig`
 
-reason: Wuffs now needs MSVC libc headers when targeting Windows. Zig's
-`--libc` configuration reaches C compilation, but the translate-c dependency
-requires its own explicit configuration. Forward the same file so cross-builds
-can use an actual Windows SDK instead of changing the target ABI or skipping
-compilation. Native builds without a libc override are unchanged.
+reason: Wuffs now needs MSVC libc headers when targeting Windows. Zig's global
+`--libc` option incorrectly applies the target SDK to native build helpers, so
+cross-compiling from macOS makes those helpers search the Windows SDK for
+`libSystem`. Carry the libc file as a target-only build option, apply it to the
+libghostty-vt artifacts, and forward it explicitly to Wuffs translation. Native
+build helpers and builds without a libc override remain unchanged.
 
 The no-libc Wuffs module also exports hidden weak calloc/free stubs. On hosted
 Linux with SIMD disabled, those definitions override the Rust executable's

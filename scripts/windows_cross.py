@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 
-SDK_ROOT = Path.home() / ".local/share/herdr/windows-cross"
+SDK_ROOT = Path.home() / ".local/share/herdl/windows-cross"
 LIBC_ENV = "LIBGHOSTTY_VT_WINDOWS_LIBC"
 TARGET = "x86_64-pc-windows-msvc"
 
@@ -55,7 +55,7 @@ def setup(accept_license: bool) -> None:
     SDK_ROOT.mkdir(parents=True, exist_ok=True)
     # SDK downloads can be large; /tmp is often RAM-backed on Linux.
     temp_parent = "/var/tmp" if sys.platform.startswith("linux") else None
-    with tempfile.TemporaryDirectory(prefix="herdr-windows-sdk-", dir=temp_parent) as cache:
+    with tempfile.TemporaryDirectory(prefix="herdl-windows-sdk-", dir=temp_parent) as cache:
         command = ["xwin", "--arch", "x86_64", "--cache-dir", cache]
         if accept_license:
             command.append("--accept-license")
@@ -73,7 +73,7 @@ def lint() -> None:
     env = {**os.environ, LIBC_ENV: str(libc_path()), "LIBGHOSTTY_VT_SIMD": "false"}
     subprocess.run(["rustup", "target", "add", TARGET], check=True)
     subprocess.run(
-        ["cargo", "clippy", "--bin", "herdr", "--locked", "--target", TARGET, "--", "-D", "warnings"],
+        ["cargo", "clippy", "--bin", "herdl", "--locked", "--target", TARGET, "--", "-D", "warnings"],
         env=env,
         check=True,
     )

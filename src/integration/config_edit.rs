@@ -410,7 +410,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
         if !result.is_empty() {
             result.push('\n');
         }
-        result.push_str("plugins:\n  enabled:\n    - herdr-agent-state\n");
+        result.push_str("plugins:\n  enabled:\n    - herdl-agent-state\n");
         return result;
     };
 
@@ -432,7 +432,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
         if line == "enabled: []" || line == "enabled: [] # herdr" {
             if enabled {
                 lines[enabled_index] = "  enabled:".to_string();
-                lines.insert(enabled_index + 1, "    - herdr-agent-state".to_string());
+                lines.insert(enabled_index + 1, "    - herdl-agent-state".to_string());
             }
             return join_yaml_lines(lines, trailing_newline);
         }
@@ -452,7 +452,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
 
         match (enabled, existing_item_index) {
             (true, Some(_)) | (false, None) => return content.to_string(),
-            (true, None) => lines.insert(list_start, "    - herdr-agent-state".to_string()),
+            (true, None) => lines.insert(list_start, "    - herdl-agent-state".to_string()),
             (false, Some(index)) => {
                 lines.remove(index);
             }
@@ -486,7 +486,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
 
         match (enabled, existing_item_index) {
             (true, Some(_)) | (false, None) => return content.to_string(),
-            (true, None) => lines.insert(flat_list_start, "  - herdr-agent-state".to_string()),
+            (true, None) => lines.insert(flat_list_start, "  - herdl-agent-state".to_string()),
             (false, Some(index)) => {
                 lines.remove(index);
             }
@@ -496,7 +496,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
 
     if enabled {
         lines.insert(plugins_index + 1, "  enabled:".to_string());
-        lines.insert(plugins_index + 2, "    - herdr-agent-state".to_string());
+        lines.insert(plugins_index + 2, "    - herdl-agent-state".to_string());
         return join_yaml_lines(lines, trailing_newline);
     }
 

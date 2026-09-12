@@ -18,7 +18,7 @@ for arg do
     printf '%s\n' "$arg" >> "$TEST_ROOT/ssh-args"
 done
 case "$last" in
-    *'command -v herdr') printf 'login banner\nherdr-remote-output-ready:1\n%s\n' "$TEST_REMOTE_HERDR" ;;
+    *'command -v herdl') printf 'login banner\nherdl-remote-output-ready:1\n%s\n' "$TEST_REMOTE_HERDR" ;;
     *'remote-api-bridge --check')
         if [ "$TEST_MODE" = old ]; then exit 2; fi
         exec /bin/sh -c "$last" ;;
@@ -27,7 +27,7 @@ case "$last" in
         exec /bin/sh -c "$last" ;;
     '/bin/sh -s')
         script=$(cat)
-        printf 'login banner\nherdr-remote-output-ready:1\n'
+        printf 'login banner\nherdl-remote-output-ready:1\n'
         case "$script" in
             *'uname -s'*) uname -s; uname -m ;;
             *'version='*) printf '%s\n' "$TEST_REMOTE_HERDR" ;;

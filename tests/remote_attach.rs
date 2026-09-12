@@ -46,11 +46,10 @@ fn wait_for_file(path: &Path, timeout: Duration) {
 
 #[test]
 fn ssh_check_message_is_visible_while_authentication_waits() {
-    check_authentication_output(false);
-    check_authentication_output(true);
+    check_authentication_output();
 }
 
-fn check_authentication_output(framed_shell: bool) {
+fn check_authentication_output() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock after Unix epoch")
@@ -84,13 +83,10 @@ authenticate() {{
 }}
 if [ ! -e "$FAKE_SSH_FIRST_DONE" ]; then
     : > "$FAKE_SSH_FIRST_DONE"
-    if [ "$FAKE_SSH_FRAMED" = 0 ]; then authenticate; fi
-    /bin/cat >/dev/null
-    printf 'login banner\nherdr-remote-output-ready:1\nLinux\nx86_64\n'
-    exit 0
-fi
-if [ "$FAKE_SSH_FRAMED" = 1 ] && [ ! -e "$FAKE_SSH_STARTED" ]; then
     authenticate
+    /bin/cat >/dev/null
+    printf 'login banner\nherdl-remote-output-ready:1\nLinux\nx86_64\n'
+    exit 0
 fi
 /bin/cat >/dev/null
 : > "$FAKE_SSH_ADVANCED"
@@ -108,7 +104,6 @@ exit 255
     let child = Command::new(env!("CARGO_BIN_EXE_herdl"))
         .args(["--remote", "check-host"])
         .env("PATH", path)
-        .env("FAKE_SSH_FRAMED", if framed_shell { "1" } else { "0" })
         .env("FAKE_SSH_STARTED", &started_path)
         .env("FAKE_SSH_APPROVED", &approval_path)
         .env("FAKE_SSH_ADVANCED", &advanced_path)

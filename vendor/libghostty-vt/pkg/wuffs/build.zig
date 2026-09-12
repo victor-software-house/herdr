@@ -36,6 +36,11 @@ const wuffs_c_source = wuffs_c_source: {
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const target_libc = b.option(
+        []const u8,
+        "target_libc",
+        "Libc configuration file applied only to target artifacts.",
+    );
 
     const module = b.addModule("wuffs", .{
         .root_source_file = b.path("src/main.zig"),
@@ -59,7 +64,7 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
             .link_libc = windows,
-            .libc_file = if (b.libc_file) |path| .{ .cwd_relative = path } else null,
+            .libc_file = if (target_libc) |path| .{ .cwd_relative = path } else null,
         });
 
         // Wuffs only needs stdlib.h and string.h from libc, and only for

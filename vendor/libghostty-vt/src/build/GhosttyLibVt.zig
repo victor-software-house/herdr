@@ -230,6 +230,9 @@ fn initLib(
         .root_module = zig.vt_c,
         .version = zig.version,
     });
+    if (zig.target_libc) |libc_file| {
+        lib.setLibCFile(.{ .cwd_relative = libc_file });
+    }
     lib.installHeadersDirectory(
         b.path("include/ghostty"),
         "ghostty",

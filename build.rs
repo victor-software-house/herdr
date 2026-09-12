@@ -77,7 +77,10 @@ fn main() {
                 "cargo:rerun-if-changed={}",
                 PathBuf::from(&libc_file).display()
             );
-            command.arg("--libc").arg(libc_file);
+            command.arg(format!(
+                "-Dtarget-libc={}",
+                PathBuf::from(libc_file).display()
+            ));
         }
     }
     if let Ok(system_dir) = env::var("LIBGHOSTTY_VT_ZIG_SYSTEM_DIR") {

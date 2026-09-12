@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/victor-software-house/qctl/main/schema/tasks.schema.json
+schema_version: 3
+prefix: HDR
+active: null
+queue: []
+archive:
+  - id: HDR-003
+    title: Validate and install downstream Herdr from portable
+    scope: remote validation and local install
+    outcome: macbook-portable builds and tests the exact forkctl stack; the verified binary is installed on this Mac without local compilation.
+    completed: 2026-09-13T11:01:27
+    evidence:
+      - Superseded by the VSH GitHub-hosted release pipeline; v0.9.0-vsh.3c95090c2870 published Linux and native macOS artifacts. Installation and coexistence proof remain tracked separately.
+    disposition: completed
+
+  - id: HDR-002
+    title: Tighten tab label spacing
+    scope: client shell tab bar
+    outcome: Tabs use one leading and one trailing cell with no extra blank inter-tab column, preserving mouse hit areas, overflow, scrolling, and drag insertion.
+    patch: compact-tab-spacing
+    completed: 2026-09-13T11:01:27
+    evidence:
+      - Superseded by configurable-tab-strip and pane-owned-terminal-tabs; full just check passed and the stack was published.
+    disposition: completed
+
+  - id: HDR-001
+    title: Inset compact sidebar numbers
+    scope: client shell sidebar
+    outcome: Collapsed workspace and agent numbers have one leading cell, retain both digits, and keep status icons aligned.
+    patch: compact-sidebar-number-inset
+    notes: Reproduced in Herdr 0.9.0 preview inside Ghostty; global terminal padding is not the fix.
+    completed: 2026-09-12T00:43:09
+    evidence:
+      - Forkctl patch 53bf932e; portable commit 7723aaf3; focused workspace and agent compact-sidebar tests passed; Rust 1.96.1 lint passed with Zig 0.16.0.
+    disposition: completed
+horizon: []

@@ -253,16 +253,25 @@ impl App {
             crate::api::SOCKET_PATH_ENV_VAR.to_string(),
             crate::api::socket_path().display().to_string(),
         ));
-        env.push(("HERDR_ENV".to_string(), "1".to_string()));
-        env.push(("HERDR_PLUGIN_ID".to_string(), plugin.plugin_id.clone()));
         env.push((
-            "HERDR_PLUGIN_ENTRYPOINT_ID".to_string(),
+            crate::product::ENV_VAR.to_string(),
+            crate::product::ENV_VALUE.to_string(),
+        ));
+        env.push((
+            crate::product::PLUGIN_ID_ENV_VAR.to_string(),
+            plugin.plugin_id.clone(),
+        ));
+        env.push((
+            crate::product::PLUGIN_ENTRYPOINT_ID_ENV_VAR.to_string(),
             entrypoint.to_string(),
         ));
-        env.push(("HERDR_PLUGIN_CONTEXT_JSON".to_string(), context_json));
+        env.push((
+            crate::product::PLUGIN_CONTEXT_JSON_ENV_VAR.to_string(),
+            context_json,
+        ));
         if let Ok(current_exe) = std::env::current_exe() {
             env.push((
-                "HERDR_BIN_PATH".to_string(),
+                crate::product::BIN_PATH_ENV_VAR.to_string(),
                 current_exe.display().to_string(),
             ));
         }
@@ -344,16 +353,18 @@ impl App {
 }
 
 fn plugin_pane_protected_env_key(key: &str) -> bool {
-    matches!(
-        key,
-        crate::api::SOCKET_PATH_ENV_VAR
-            | "HERDR_ENV"
-            | "HERDR_PLUGIN_ID"
-            | "HERDR_PLUGIN_ROOT"
-            | "HERDR_PLUGIN_CONFIG_DIR"
-            | "HERDR_PLUGIN_STATE_DIR"
-            | "HERDR_PLUGIN_ENTRYPOINT_ID"
-            | "HERDR_PLUGIN_CONTEXT_JSON"
-            | "HERDR_BIN_PATH"
-    )
+    key.starts_with("HERDR_")
+        || key.starts_with("HERDL_")
+        || matches!(
+            key,
+            crate::api::SOCKET_PATH_ENV_VAR
+                | crate::product::ENV_VAR
+                | crate::product::PLUGIN_ID_ENV_VAR
+                | crate::product::PLUGIN_ROOT_ENV_VAR
+                | crate::product::PLUGIN_CONFIG_DIR_ENV_VAR
+                | crate::product::PLUGIN_STATE_DIR_ENV_VAR
+                | crate::product::PLUGIN_ENTRYPOINT_ID_ENV_VAR
+                | crate::product::PLUGIN_CONTEXT_JSON_ENV_VAR
+                | crate::product::BIN_PATH_ENV_VAR
+        )
 }

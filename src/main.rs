@@ -1,7 +1,7 @@
 use std::io;
 
-pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
-pub(crate) const HERDR_ENV_VALUE: &str = "1";
+pub(crate) const HERDR_ENV_VAR: &str = product::ENV_VAR;
+pub(crate) const HERDR_ENV_VALUE: &str = product::ENV_VALUE;
 const NESTED_HERDR_MESSAGES: [&str; 6] = [
     "inception detected. we need to go deeper... said no one ever.",
     "recursion is a pathway to many abilities some consider to be... unnatural.",
@@ -39,6 +39,7 @@ mod platform;
 mod plugin_command;
 mod plugin_paths;
 mod popup_size;
+mod product;
 mod product_announcements;
 mod protocol;
 mod pty;
@@ -61,8 +62,8 @@ mod update;
 mod workspace;
 mod worktree;
 
-const DEFAULT_CONFIG: &str = r##"# herdr configuration
-# Place this file at ~/.config/herdr/config.toml
+const DEFAULT_CONFIG: &str = r##"# herdl configuration
+# Place this file at ~/.config/herdl/config.toml
 
 # Show first-run notification setup on startup.
 # Missing also shows onboarding; set false after you've chosen.
@@ -441,11 +442,11 @@ pane_history = false
 const SKILL: &str = include_str!("../skills/herdr/SKILL.md");
 
 fn should_block_nested(config: &config::Config) -> bool {
-    should_block_nested_for_env(config, std::env::var(HERDR_ENV_VAR).ok().as_deref())
+    should_block_nested_for_env(config, std::env::var(product::ENV_VAR).ok().as_deref())
 }
 
-fn should_block_nested_for_env(config: &config::Config, herdr_env: Option<&str>) -> bool {
-    !config.experimental.allow_nested && herdr_env == Some(HERDR_ENV_VALUE)
+fn should_block_nested_for_env(config: &config::Config, product_env: Option<&str>) -> bool {
+    !config.experimental.allow_nested && product_env == Some(product::ENV_VALUE)
 }
 
 fn random_nested_message() -> &'static str {
@@ -461,7 +462,10 @@ fn random_nested_message() -> &'static str {
 
 fn exit_if_nested_disabled(config: &config::Config) {
     if should_block_nested(config) {
-        eprintln!("\x1b[1merror:\x1b[0m nested herdr is disabled by default.");
+        eprintln!(
+            "\x1b[1merror:\x1b[0m nested {} is disabled by default.",
+            product::BINARY_NAME
+        );
         eprintln!("see configuration if you want to enable it.");
         eprintln!();
         eprintln!("\x1b[2m\"{}\"\x1b[0m", random_nested_message());
@@ -500,11 +504,12 @@ fn finish_cli(outcome: io::Result<cli::CommandOutcome>) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
+    product::scrub_foreign_process_env();
     let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
         Err(err) => {
             eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("run '{} --help' for usage", product::BINARY_NAME);
             std::process::exit(2);
         }
     };
@@ -515,7 +520,7 @@ fn main() -> io::Result<()> {
         Ok(args) => args,
         Err(err) => {
             eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("run '{} --help' for usage", product::BINARY_NAME);
             std::process::exit(2);
         }
     };
@@ -523,7 +528,7 @@ fn main() -> io::Result<()> {
         Ok(parsed) => parsed,
         Err(err) => {
             eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("run '{} --help' for usage", product::BINARY_NAME);
             std::process::exit(2);
         }
     };
@@ -538,7 +543,7 @@ fn main() -> io::Result<()> {
         })
     {
         eprintln!("error: --remote can only be used with the default launch command");
-        eprintln!("run 'herdr --help' for usage");
+        eprintln!("run '{} --help' for usage", product::BINARY_NAME);
         std::process::exit(2);
     }
 
@@ -573,7 +578,7 @@ fn main() -> io::Result<()> {
             }
             Err(err) => {
                 eprintln!("{err}");
-                eprintln!("usage: herdr update [--handoff]");
+                eprintln!("usage: {} update [--handoff]", product::BINARY_NAME);
                 std::process::exit(2);
             }
         };
@@ -592,31 +597,49 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         platform::begin_cli_output();
-        println!("herdr — terminal workspace manager for AI coding agents");
+        println!(
+            "{} — terminal workspace manager for AI coding agents",
+            product::DISPLAY_NAME
+        );
         println!();
-        println!("Usage: herdr [options]");
-        println!("       herdr --session <name> [options]");
-        println!("       herdr --machine <label-or-id> <command>");
-        println!("       herdr --remote <ssh-target> [--session <name>]");
-        println!("       herdr session attach <name>");
-        println!("       herdr completion zsh");
-        println!("       herdr update [--handoff]");
-        println!("       herdr channel set <stable|preview>");
-        println!("       herdr machine <subcommand> ...");
-        println!("       herdr server stop");
-        println!("       herdr server reload-config");
-        println!("       herdr api <subcommand> ...");
-        println!("       herdr completion <shell>");
-        println!("       herdr config <subcommand> ...");
-        println!("       herdr channel <subcommand> ...");
-        println!("       herdr workspace <subcommand> ...");
-        println!("       herdr worktree <subcommand> ...");
-        println!("       herdr tab <subcommand> ...");
-        println!("       herdr notification <subcommand> ...");
-        println!("       herdr agent <subcommand> ...");
-        println!("       herdr pane <subcommand> ...");
-        println!("       herdr session <subcommand> ...");
-        println!("       herdr integration <subcommand> ...");
+        println!("Usage: {} [options]", product::BINARY_NAME);
+        println!("       {} --session <name> [options]", product::BINARY_NAME);
+        println!(
+            "       {} --machine <label-or-id> <command>",
+            product::BINARY_NAME
+        );
+        println!(
+            "       {} --remote <ssh-target> [--session <name>]",
+            product::BINARY_NAME
+        );
+        println!("       {} session attach <name>", product::BINARY_NAME);
+        println!("       {} completion zsh", product::BINARY_NAME);
+        println!("       {} update [--handoff]", product::BINARY_NAME);
+        println!(
+            "       {} channel set <stable|preview>",
+            product::BINARY_NAME
+        );
+        println!("       {} machine <subcommand> ...", product::BINARY_NAME);
+        println!("       {} server stop", product::BINARY_NAME);
+        println!("       {} server reload-config", product::BINARY_NAME);
+        println!("       {} api <subcommand> ...", product::BINARY_NAME);
+        println!("       {} completion <shell>", product::BINARY_NAME);
+        println!("       {} config <subcommand> ...", product::BINARY_NAME);
+        println!("       {} channel <subcommand> ...", product::BINARY_NAME);
+        println!("       {} workspace <subcommand> ...", product::BINARY_NAME);
+        println!("       {} worktree <subcommand> ...", product::BINARY_NAME);
+        println!("       {} tab <subcommand> ...", product::BINARY_NAME);
+        println!(
+            "       {} notification <subcommand> ...",
+            product::BINARY_NAME
+        );
+        println!("       {} agent <subcommand> ...", product::BINARY_NAME);
+        println!("       {} pane <subcommand> ...", product::BINARY_NAME);
+        println!("       {} session <subcommand> ...", product::BINARY_NAME);
+        println!(
+            "       {} integration <subcommand> ...",
+            product::BINARY_NAME
+        );
         println!();
         println!("Common commands:");
         for (command, description) in [
@@ -682,16 +705,25 @@ fn main() -> io::Result<()> {
                 "Manage built-in agent integrations",
             ),
         ] {
-            println!("  {command:<32} {description}");
+            println!(
+                "  {:<32} {description}",
+                command.replace("herdr", product::BINARY_NAME)
+            );
         }
         println!();
         println!("Advanced commands:");
-        println!("  {:<32} Run as headless server", "herdr server");
+        println!(
+            "  {:<32} Run as headless server",
+            format!("{} server", product::BINARY_NAME)
+        );
         println!();
         println!("Options:");
         println!("  --session <name>    Use or create a named persistent session");
         println!("  --machine <label-or-id>  Run an API command on a saved SSH machine");
-        println!("  --remote <target>   Attach through SSH to a remote Herdr server");
+        println!(
+            "  --remote <target>   Attach through SSH to a remote {} server",
+            product::DISPLAY_NAME
+        );
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
         println!("  --handoff           Opt into live handoff for update or remote attach");
@@ -702,8 +734,11 @@ fn main() -> io::Result<()> {
         println!();
         println!("Config: {}", config::config_path().display());
         println!("Logs:   {}", logging::help_log_paths_summary());
-        println!("Env:    HERDR_CONFIG_PATH overrides config file path");
-        println!("Home:   https://herdr.dev");
+        println!(
+            "Env:    {} overrides config file path",
+            product::CONFIG_PATH_ENV_VAR
+        );
+        println!("Home:   {}", product::HOME_URL);
         println!();
         println!("{}", cli::AGENT_HELP_FOOTER);
         return Ok(());
@@ -711,7 +746,7 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
         platform::begin_cli_output();
-        println!("herdr {}", crate::build_info::version());
+        println!("{} {}", product::BINARY_NAME, crate::build_info::version());
         return Ok(());
     }
 
@@ -744,7 +779,7 @@ fn main() -> io::Result<()> {
         let arg_name = arg.split_once('=').map(|(name, _)| name).unwrap_or(arg);
         if arg.starts_with('-') && !known_flags.contains(&arg_name) {
             eprintln!("unknown option: {arg}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("run '{} --help' for usage", product::BINARY_NAME);
             std::process::exit(2);
         }
         if !arg.starts_with('-')
@@ -766,7 +801,7 @@ fn main() -> io::Result<()> {
             .contains(&arg.as_str())
         {
             eprintln!("unknown command: {arg}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("run '{} --help' for usage", product::BINARY_NAME);
             std::process::exit(2);
         }
     }

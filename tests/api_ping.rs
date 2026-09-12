@@ -214,15 +214,21 @@ impl JsonLineReader {
     }
 }
 
+fn with_product(json: &str) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(json).unwrap();
+    value["product"] = serde_json::json!("herdl");
+    value.to_string()
+}
+
 fn send_request(socket_path: &Path, json: &str) -> serde_json::Value {
     let mut reader = JsonLineReader::connect(socket_path);
-    reader.send_line(json);
+    reader.send_line(&with_product(json));
     reader.read_json_line(Duration::from_secs(5))
 }
 
 fn open_subscription(socket_path: &Path, json: &str) -> JsonLineReader {
     let mut reader = JsonLineReader::connect(socket_path);
-    reader.send_line(json);
+    reader.send_line(&with_product(json));
     reader
 }
 
@@ -299,14 +305,14 @@ fn ping_over_socket_returns_version() {
 
     let value = send_request(
         &socket_path,
-        r#"{"id":"req_1","method":"ping","params":{}}"#,
+        r#"{"product":"herdl","id":"req_1","method":"ping","params":{}}"#,
     );
     assert_eq!(value["id"], "req_1");
     assert_eq!(value["result"]["type"], "pong");
     assert_eq!(value["result"]["version"], env!("CARGO_PKG_VERSION"));
     // Intentionally hardcoded so wire protocol bumps require updating this test.
     // Changing this value means old clients/servers are no longer compatible.
-    assert_eq!(value["result"]["protocol"], 22);
+    assert_eq!(value["result"]["protocol"], support::CURRENT_PROTOCOL);
 
     cleanup_spawned_herdr(child, base);
 }
@@ -340,7 +346,7 @@ contains = ["server-reload-marker"]
 
     let response = send_request(
         &socket_path,
-        r#"{"id":"reload_manifests","method":"server.reload_agent_manifests","params":{}}"#,
+        r#"{"product":"herdl","id":"reload_manifests","method":"server.reload_agent_manifests","params":{}}"#,
     );
     assert_eq!(response["id"], "reload_manifests");
     assert_eq!(response["result"]["type"], "agent_manifest_reload");
@@ -371,7 +377,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"create","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"create","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -381,7 +387,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
     let process_info = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"process","method":"pane.process_info","params":{{"pane_id":"{pane_id}"}}}}"#
+            r#"{{"product":"herdl","id":"process","method":"pane.process_info","params":{{"pane_id":"{pane_id}"}}}}"#
         ),
     );
     let shell_pid = process_info["result"]["process_info"]["shell_pid"]
@@ -394,7 +400,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
     loop {
         let panes = send_request(
             &socket_path,
-            r#"{"id":"panes","method":"pane.list","params":{}}"#,
+            r#"{"product":"herdl","id":"panes","method":"pane.list","params":{}}"#,
         );
         if panes["result"]["panes"]
             .as_array()
@@ -408,7 +414,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
 
     let stopped = send_request(
         &socket_path,
-        r#"{"id":"stop","method":"server.stop","params":{}}"#,
+        r#"{"product":"herdl","id":"stop","method":"server.stop","params":{}}"#,
     );
     assert_eq!(stopped["result"]["type"], "ok");
     child.child.wait().expect("server should stop cleanly");
@@ -442,7 +448,7 @@ fn workspace_list_and_create_round_trip() {
 
     let empty = send_request(
         &socket_path,
-        r#"{"id":"req_2","method":"workspace.list","params":{}}"#,
+        r#"{"product":"herdl","id":"req_2","method":"workspace.list","params":{}}"#,
     );
     assert_eq!(empty["id"], "req_2");
     assert_eq!(empty["result"]["type"], "workspace_list");
@@ -451,7 +457,7 @@ fn workspace_list_and_create_round_trip() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_3","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_3","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -484,7 +490,7 @@ fn workspace_list_and_create_round_trip() {
 
     let listed = send_request(
         &socket_path,
-        r#"{"id":"req_4","method":"workspace.list","params":{}}"#,
+        r#"{"product":"herdl","id":"req_4","method":"workspace.list","params":{}}"#,
     );
     let workspaces = listed["result"]["workspaces"].as_array().unwrap();
     assert_eq!(workspaces.len(), 1);
@@ -493,7 +499,7 @@ fn workspace_list_and_create_round_trip() {
     let fetched = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_5","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_5","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
     );
@@ -502,7 +508,7 @@ fn workspace_list_and_create_round_trip() {
     let metadata = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_workspace_metadata","method":"workspace.report_metadata","params":{{"workspace_id":"{}","source":"user:test","tokens":{{"jj_status":"2 changes"}}}}}}"#,
+            r#"{{"product":"herdl","id":"req_workspace_metadata","method":"workspace.report_metadata","params":{{"workspace_id":"{}","source":"user:test","tokens":{{"jj_status":"2 changes"}}}}}}"#,
             workspace_id
         ),
     );
@@ -510,7 +516,7 @@ fn workspace_list_and_create_round_trip() {
     let fetched = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_workspace_metadata_get","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_workspace_metadata_get","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
     );
@@ -521,7 +527,7 @@ fn workspace_list_and_create_round_trip() {
 
     let panes = send_request(
         &socket_path,
-        r#"{"id":"req_6","method":"pane.list","params":{}}"#,
+        r#"{"product":"herdl","id":"req_6","method":"pane.list","params":{}}"#,
     );
     let panes = panes["result"]["panes"].as_array().unwrap();
     assert_eq!(panes.len(), 1);
@@ -535,7 +541,7 @@ fn workspace_list_and_create_round_trip() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -545,7 +551,7 @@ fn workspace_list_and_create_round_trip() {
     let read = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_8","method":"pane.read","params":{{"pane_id":"{}","source":"visible"}}}}"#,
+            r#"{{"product":"herdl","id":"req_8","method":"pane.read","params":{{"pane_id":"{}","source":"visible"}}}}"#,
             legacy_pane_id
         ),
     );
@@ -556,7 +562,7 @@ fn workspace_list_and_create_round_trip() {
     let send_text = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_9","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo alpha; echo beta; echo gamma"}}}}"#,
+            r#"{{"product":"herdl","id":"req_9","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo alpha; echo beta; echo gamma"}}}}"#,
             pane_id
         ),
     );
@@ -565,7 +571,7 @@ fn workspace_list_and_create_round_trip() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_10","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_10","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -576,7 +582,7 @@ fn workspace_list_and_create_round_trip() {
     let recent = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_11","method":"pane.read","params":{{"pane_id":"{}","source":"recent","lines":50}}}}"#,
+            r#"{{"product":"herdl","id":"req_11","method":"pane.read","params":{{"pane_id":"{}","source":"recent","lines":50}}}}"#,
             pane_id
         ),
     );
@@ -587,7 +593,7 @@ fn workspace_list_and_create_round_trip() {
         let limited = send_request(
             &socket_path,
             &format!(
-                r#"{{"id":"req_11_{source}","method":"pane.read","params":{{"pane_id":"{}","source":"{source}","lines":2}}}}"#,
+                r#"{{"product":"herdl","id":"req_11_{source}","method":"pane.read","params":{{"pane_id":"{}","source":"{source}","lines":2}}}}"#,
                 pane_id
             ),
         );
@@ -601,7 +607,7 @@ fn workspace_list_and_create_round_trip() {
     let waited = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_12","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"gamma"}},"timeout_ms":2000}}}}"#,
+            r#"{{"product":"herdl","id":"req_12","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"gamma"}},"timeout_ms":2000}}}}"#,
             legacy_pane_id
         ),
     );
@@ -620,7 +626,7 @@ fn workspace_list_and_create_round_trip() {
     let send_input = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_12b","method":"pane.send_input","params":{{"pane_id":"{}","text":"echo delta","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_12b","method":"pane.send_input","params":{{"pane_id":"{}","text":"echo delta","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -629,7 +635,7 @@ fn workspace_list_and_create_round_trip() {
     let waited_delta = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_12c","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"delta"}},"timeout_ms":2000}}}}"#,
+            r#"{{"product":"herdl","id":"req_12c","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"delta"}},"timeout_ms":2000}}}}"#,
             pane_id
         ),
     );
@@ -644,7 +650,7 @@ fn workspace_list_and_create_round_trip() {
     let waited_regex = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_13","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"regex","value":"alp.*gamma"}},"timeout_ms":2000}}}}"#,
+            r#"{{"product":"herdl","id":"req_13","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":40,"match":{{"type":"regex","value":"alp.*gamma"}},"timeout_ms":2000}}}}"#,
             pane_id
         ),
     );
@@ -659,7 +665,7 @@ fn workspace_list_and_create_round_trip() {
     let timeout = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_14","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":10,"match":{{"type":"substring","value":"definitely-not-there"}},"timeout_ms":200}}}}"#,
+            r#"{{"product":"herdl","id":"req_14","method":"pane.wait_for_output","params":{{"pane_id":"{}","source":"recent","lines":10,"match":{{"type":"substring","value":"definitely-not-there"}},"timeout_ms":200}}}}"#,
             pane_id
         ),
     );
@@ -683,7 +689,7 @@ fn tab_methods_round_trip_over_socket() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_t1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -700,7 +706,7 @@ fn tab_methods_round_trip_over_socket() {
     let tab_created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_t2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
             workspace_id
         ),
     );
@@ -726,7 +732,7 @@ fn tab_methods_round_trip_over_socket() {
     let tab_list = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_t3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
     );
@@ -737,7 +743,7 @@ fn tab_methods_round_trip_over_socket() {
     let panes = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t3b","method":"pane.list","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_t3b","method":"pane.list","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
     );
@@ -750,7 +756,7 @@ fn tab_methods_round_trip_over_socket() {
     let tab_get = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t4","method":"tab.get","params":{{"tab_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_t4","method":"tab.get","params":{{"tab_id":"{}"}}}}"#,
             second_tab_id
         ),
     );
@@ -759,7 +765,7 @@ fn tab_methods_round_trip_over_socket() {
     let renamed = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
+            r#"{{"product":"herdl","id":"req_t5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
             second_tab_id
         ),
     );
@@ -768,7 +774,7 @@ fn tab_methods_round_trip_over_socket() {
     let focused = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_t6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
             first_tab_id
         ),
     );
@@ -778,7 +784,7 @@ fn tab_methods_round_trip_over_socket() {
     let closed = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_t7","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_t7","method":"tab.close","params":{{"tab_id":"{}"}}}}"#,
             second_tab_id
         ),
     );
@@ -806,7 +812,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"fg_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"fg_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -836,7 +842,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"fg_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"fg_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -852,7 +858,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"fg_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"fg_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -864,7 +870,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
 
     let panes = send_request(
         &socket_path,
-        r#"{"id":"fg_panes","method":"pane.list","params":{}}"#,
+        r#"{"product":"herdl","id":"fg_panes","method":"pane.list","params":{}}"#,
     );
     assert_eq!(
         panes["result"]["panes"][0]["cwd"],
@@ -878,7 +884,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
     let process_info = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"fg_process_info","method":"pane.process_info","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"fg_process_info","method":"pane.process_info","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -905,7 +911,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
     let reported = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"fg_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"probe","state":"working"}}}}"#,
+            r#"{{"product":"herdl","id":"fg_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"probe","state":"working"}}}}"#,
             pane_id
         ),
     );
@@ -913,7 +919,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
 
     let agents = send_request(
         &socket_path,
-        r#"{"id":"fg_agents","method":"agent.list","params":{}}"#,
+        r#"{"product":"herdl","id":"fg_agents","method":"agent.list","params":{}}"#,
     );
     assert_eq!(
         agents["result"]["agents"][0]["cwd"],
@@ -966,7 +972,7 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"member_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"member_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1003,7 +1009,7 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"member_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"member_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -1038,7 +1044,7 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"member_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"member_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -1181,7 +1187,7 @@ fn agent_methods_round_trip_over_socket() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"agent_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1201,7 +1207,7 @@ fn agent_methods_round_trip_over_socket() {
     let renamed = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_rename_pane","method":"pane.rename","params":{{"pane_id":"{}","label":"worker"}}}}"#,
+            r#"{{"product":"herdl","id":"agent_rename_pane","method":"pane.rename","params":{{"pane_id":"{}","label":"worker"}}}}"#,
             pane_id
         ),
     );
@@ -1210,7 +1216,7 @@ fn agent_methods_round_trip_over_socket() {
     let reported = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"pi","state":"working"}}}}"#,
+            r#"{{"product":"herdl","id":"agent_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"pi","state":"working"}}}}"#,
             pane_id
         ),
     );
@@ -1218,7 +1224,7 @@ fn agent_methods_round_trip_over_socket() {
 
     let listed = send_request(
         &socket_path,
-        r#"{"id":"agent_list","method":"agent.list","params":{}}"#,
+        r#"{"product":"herdl","id":"agent_list","method":"agent.list","params":{}}"#,
     );
     let agents = listed["result"]["agents"].as_array().unwrap();
     assert_eq!(agents.len(), 1);
@@ -1231,7 +1237,7 @@ fn agent_methods_round_trip_over_socket() {
     let fetched_by_pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_get_pane","method":"agent.get","params":{{"target":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"agent_get_pane","method":"agent.get","params":{{"target":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -1243,7 +1249,7 @@ fn agent_methods_round_trip_over_socket() {
     let renamed_first_agent = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_rename_first","method":"agent.rename","params":{{"target":"{}","name":"worker"}}}}"#,
+            r#"{{"product":"herdl","id":"agent_rename_first","method":"agent.rename","params":{{"target":"{}","name":"worker"}}}}"#,
             pane_id
         ),
     );
@@ -1251,27 +1257,27 @@ fn agent_methods_round_trip_over_socket() {
 
     let fetched_by_name = send_request(
         &socket_path,
-        r#"{"id":"agent_get_name","method":"agent.get","params":{"target":"worker"}}"#,
+        r#"{"product":"herdl","id":"agent_get_name","method":"agent.get","params":{"target":"worker"}}"#,
     );
     assert_eq!(fetched_by_name["result"]["agent"]["name"], "worker");
 
     let read = send_request(
         &socket_path,
-        r#"{"id":"agent_read","method":"agent.read","params":{"target":"worker","source":"visible"}}"#,
+        r#"{"product":"herdl","id":"agent_read","method":"agent.read","params":{"target":"worker","source":"visible"}}"#,
     );
     assert_eq!(read["result"]["type"], "pane_read");
     assert_eq!(read["result"]["read"]["pane_id"], pane_id);
 
     let sent = send_request(
         &socket_path,
-        r#"{"id":"agent_send_keys","method":"agent.send_keys","params":{"target":"worker","keys":["enter"]}}"#,
+        r#"{"product":"herdl","id":"agent_send_keys","method":"agent.send_keys","params":{"target":"worker","keys":["enter"]}}"#,
     );
     assert_eq!(sent["error"]["code"], "agent_not_ready");
 
     let tab_created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_tab","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
+            r#"{{"product":"herdl","id":"agent_tab","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
             workspace_id
         ),
     );
@@ -1286,7 +1292,7 @@ fn agent_methods_round_trip_over_socket() {
     let second_reported = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_second_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"codex","state":"idle"}}}}"#,
+            r#"{{"product":"herdl","id":"agent_second_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"codex","state":"idle"}}}}"#,
             second_pane_id
         ),
     );
@@ -1295,7 +1301,7 @@ fn agent_methods_round_trip_over_socket() {
     let second_renamed = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"agent_second_rename","method":"agent.rename","params":{{"target":"{}","name":"reviewer"}}}}"#,
+            r#"{{"product":"herdl","id":"agent_second_rename","method":"agent.rename","params":{{"target":"{}","name":"reviewer"}}}}"#,
             second_pane_id
         ),
     );
@@ -1303,7 +1309,7 @@ fn agent_methods_round_trip_over_socket() {
 
     let duplicate = send_request(
         &socket_path,
-        r#"{"id":"agent_duplicate","method":"agent.rename","params":{"target":"reviewer","name":"worker"}}"#,
+        r#"{"product":"herdl","id":"agent_duplicate","method":"agent.rename","params":{"target":"reviewer","name":"worker"}}"#,
     );
     assert_eq!(duplicate["error"]["code"], "agent_name_taken");
     assert!(duplicate["error"]["message"]
@@ -1313,13 +1319,13 @@ fn agent_methods_round_trip_over_socket() {
 
     let agent_renamed = send_request(
         &socket_path,
-        r#"{"id":"agent_rename","method":"agent.rename","params":{"target":"reviewer","name":"qa"}}"#,
+        r#"{"product":"herdl","id":"agent_rename","method":"agent.rename","params":{"target":"reviewer","name":"qa"}}"#,
     );
     assert_eq!(agent_renamed["result"]["agent"]["name"], "qa");
 
     let focused = send_request(
         &socket_path,
-        r#"{"id":"agent_focus","method":"agent.focus","params":{"target":"qa"}}"#,
+        r#"{"product":"herdl","id":"agent_focus","method":"agent.focus","params":{"target":"qa"}}"#,
     );
     assert_eq!(
         focused["result"]["agent"]["terminal_id"],
@@ -1345,7 +1351,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_nf_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_nf_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1361,7 +1367,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
     let tab_created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_nf_2","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
+            r#"{{"product":"herdl","id":"req_nf_2","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
             workspace_id
         ),
     );
@@ -1376,7 +1382,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
     let tab_list = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_nf_3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_nf_3","method":"tab.list","params":{{"workspace_id":"{}"}}}}"#,
             workspace_id
         ),
     );
@@ -1426,7 +1432,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
 
     let mut reader = open_subscription(
         &socket_path,
-        r#"{"id":"sub_life_a","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"},{"type":"workspace.focused"},{"type":"tab.created"},{"type":"tab.focused"},{"type":"tab.renamed"},{"type":"pane.created"},{"type":"pane.focused"},{"type":"pane.agent_detected"}]}}"#,
+        r#"{"product":"herdl","id":"sub_life_a","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"},{"type":"workspace.focused"},{"type":"tab.created"},{"type":"tab.focused"},{"type":"tab.renamed"},{"type":"pane.created"},{"type":"pane.focused"},{"type":"pane.agent_detected"}]}}"#,
     );
 
     let ack = reader.read_json_line(Duration::from_secs(2));
@@ -1436,7 +1442,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_l1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_l1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1483,7 +1489,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     let send_pi = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_l2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_l2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
             pane_id
         ),
     );
@@ -1491,7 +1497,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_l3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_l3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -1504,7 +1510,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     let new_tab = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_l4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_l4","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
             workspace_id
         ),
     );
@@ -1522,7 +1528,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     let renamed_tab = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_l5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
+            r#"{{"product":"herdl","id":"req_l5","method":"tab.rename","params":{{"tab_id":"{}","label":"logs"}}}}"#,
             second_tab_id
         ),
     );
@@ -1549,7 +1555,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_pc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_pc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1564,7 +1570,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
 
     let mut reader = open_subscription(
         &socket_path,
-        r#"{"id":"sub_life_b","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.created"},{"type":"pane.closed"}]}}"#,
+        r#"{"product":"herdl","id":"sub_life_b","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.created"},{"type":"pane.closed"}]}}"#,
     );
 
     let ack = reader.read_json_line(Duration::from_secs(2));
@@ -1580,7 +1586,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
     let split = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_pc_2","method":"pane.split","params":{{"target_pane_id":"{}","direction":"right","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_pc_2","method":"pane.split","params":{{"target_pane_id":"{}","direction":"right","focus":true}}}}"#,
             pane_id
         ),
     );
@@ -1600,7 +1606,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
     let closed = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_pc_3","method":"pane.close","params":{{"pane_id":"{}-2"}}}}"#,
+            r#"{{"product":"herdl","id":"req_pc_3","method":"pane.close","params":{{"pane_id":"{}-2"}}}}"#,
             workspace_id
         ),
     );
@@ -1632,7 +1638,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_tc_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1644,7 +1650,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     let new_tab = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_tc_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
             workspace_id
         ),
     );
@@ -1655,7 +1661,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
 
     let mut reader = open_subscription(
         &socket_path,
-        r#"{"id":"sub_life_c","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.renamed"},{"type":"tab.closed"},{"type":"workspace.closed"}]}}"#,
+        r#"{"product":"herdl","id":"sub_life_c","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.renamed"},{"type":"tab.closed"},{"type":"workspace.closed"}]}}"#,
     );
 
     let ack = reader.read_json_line(Duration::from_secs(2));
@@ -1665,7 +1671,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     let closed_tab = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_3","method":"tab.close","params":{{"tab_id":"{}:2"}}}}"#,
+            r#"{{"product":"herdl","id":"req_tc_3","method":"tab.close","params":{{"tab_id":"{}:2"}}}}"#,
             workspace_id
         ),
     );
@@ -1677,7 +1683,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     let renamed_ws = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_tc_4","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
+            r#"{{"product":"herdl","id":"req_tc_4","method":"workspace.rename","params":{{"workspace_id":"{}","label":"renamed"}}}}"#,
             workspace_id
         ),
     );
@@ -1690,7 +1696,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
 
     let closed_ws = send_request(
         &socket_path,
-        r#"{"id":"req_tc_5","method":"workspace.close","params":{"workspace_id":"1"}}"#,
+        r#"{"product":"herdl","id":"req_tc_5","method":"workspace.close","params":{"workspace_id":"1"}}"#,
     );
     assert_eq!(closed_ws["result"]["type"], "ok");
 
@@ -1735,7 +1741,7 @@ fn pane_report_agent_updates_effective_state() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1747,7 +1753,7 @@ fn pane_report_agent_updates_effective_state() {
     let send_pi = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
             pane_id
         ),
     );
@@ -1755,7 +1761,7 @@ fn pane_report_agent_updates_effective_state() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -1766,7 +1772,7 @@ fn pane_report_agent_updates_effective_state() {
         let pane = send_request(
             &socket_path,
             &format!(
-                r#"{{"id":"req_hook_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                r#"{{"product":"herdl","id":"req_hook_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
                 pane_id
             ),
         );
@@ -1784,7 +1790,7 @@ fn pane_report_agent_updates_effective_state() {
     let session = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
             pane_id,
             session_path.display()
         ),
@@ -1793,7 +1799,7 @@ fn pane_report_agent_updates_effective_state() {
     let hook = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_5","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","message":"thinking","agent_session_path":"{}","seq":2}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_5","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","message":"thinking","agent_session_path":"{}","seq":2}}}}"#,
             pane_id,
             session_path.display()
         ),
@@ -1803,7 +1809,7 @@ fn pane_report_agent_updates_effective_state() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -1823,7 +1829,7 @@ fn pane_report_agent_updates_effective_state() {
     let metadata = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_metadata","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"herdr:pi","title":"Refactor auth","display_agent":"Pi auth","state_labels":{{"working":"deep in the mines"}},"tokens":{{"summary":"reviewing auth","model":"opus"}}}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_metadata","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"herdr:pi","title":"Refactor auth","display_agent":"Pi auth","state_labels":{{"working":"deep in the mines"}},"tokens":{{"summary":"reviewing auth","model":"opus"}}}}}}"#,
             pane_id
         ),
     );
@@ -1832,7 +1838,7 @@ fn pane_report_agent_updates_effective_state() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_metadata_get","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_metadata_get","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -1853,7 +1859,7 @@ fn pane_report_agent_updates_effective_state() {
     let agent = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_metadata_agent","method":"agent.get","params":{{"target":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_metadata_agent","method":"agent.get","params":{{"target":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -1883,7 +1889,7 @@ fn pane_report_agent_updates_effective_state() {
     let blank_source_metadata = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_metadata_blank_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"   ","title":"x"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_metadata_blank_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"   ","title":"x"}}}}"#,
             pane_id
         ),
     );
@@ -1895,7 +1901,7 @@ fn pane_report_agent_updates_effective_state() {
     let blank_title_clear_metadata = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_metadata_blank_title_clear","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","title":"   ","clear_title":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_metadata_blank_title_clear","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","title":"   ","clear_title":true}}}}"#,
             pane_id
         ),
     );
@@ -1907,7 +1913,7 @@ fn pane_report_agent_updates_effective_state() {
     let blank_authority_source_metadata = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_metadata_blank_authority_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","applies_to_source":"   ","title":"x"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_metadata_blank_authority_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","applies_to_source":"   ","title":"x"}}}}"#,
             pane_id
         ),
     );
@@ -1933,7 +1939,7 @@ fn pane_report_agent_accepts_unknown_agent_labels() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_generic_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_generic_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -1945,7 +1951,7 @@ fn pane_report_agent_accepts_unknown_agent_labels() {
     let hook = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_generic_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:hermes","agent":"hermes","state":"working"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_generic_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:hermes","agent":"hermes","state":"working"}}}}"#,
             pane_id
         ),
     );
@@ -1954,7 +1960,7 @@ fn pane_report_agent_accepts_unknown_agent_labels() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_hook_generic_3","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_hook_generic_3","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -2006,7 +2012,7 @@ fn official_release_waits_for_confirmed_process_exit() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_release_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_release_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -2018,7 +2024,7 @@ fn official_release_waits_for_confirmed_process_exit() {
     let send_pi = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_release_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_release_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
             pane_id
         ),
     );
@@ -2026,7 +2032,7 @@ fn official_release_waits_for_confirmed_process_exit() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_release_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_release_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -2037,7 +2043,7 @@ fn official_release_waits_for_confirmed_process_exit() {
         let pane = send_request(
             &socket_path,
             &format!(
-                r#"{{"id":"req_release_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                r#"{{"product":"herdl","id":"req_release_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
                 pane_id
             ),
         );
@@ -2055,7 +2061,7 @@ fn official_release_waits_for_confirmed_process_exit() {
     let session = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_release_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
+            r#"{{"product":"herdl","id":"req_release_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
             pane_id,
             session_path.display()
         ),
@@ -2064,7 +2070,7 @@ fn official_release_waits_for_confirmed_process_exit() {
     let hook = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_release_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","agent_session_path":"{}","seq":2}}}}"#,
+            r#"{{"product":"herdl","id":"req_release_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","agent_session_path":"{}","seq":2}}}}"#,
             pane_id,
             session_path.display()
         ),
@@ -2074,7 +2080,7 @@ fn official_release_waits_for_confirmed_process_exit() {
     let released = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_release_5","method":"pane.release_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_release_5","method":"pane.release_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi"}}}}"#,
             pane_id
         ),
     );
@@ -2085,7 +2091,7 @@ fn official_release_waits_for_confirmed_process_exit() {
         let pane = send_request(
             &socket_path,
             &format!(
-                r#"{{"id":"req_release_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                r#"{{"product":"herdl","id":"req_release_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
                 pane_id
             ),
         );
@@ -2104,7 +2110,7 @@ fn official_release_waits_for_confirmed_process_exit() {
         let pane = send_request(
             &socket_path,
             &format!(
-                r#"{{"id":"req_release_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                r#"{{"product":"herdl","id":"req_release_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
                 pane_id
             ),
         );
@@ -2157,7 +2163,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_clear_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_clear_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -2169,7 +2175,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let send_pi = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_clear_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_clear_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
             pane_id
         ),
     );
@@ -2177,7 +2183,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_clear_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_clear_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -2188,7 +2194,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
         let pane = send_request(
             &socket_path,
             &format!(
-                r#"{{"id":"req_clear_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+                r#"{{"product":"herdl","id":"req_clear_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
                 pane_id
             ),
         );
@@ -2205,7 +2211,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let fallback_before_hook = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_clear_fallback","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_clear_fallback","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -2217,7 +2223,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let hook = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_clear_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"idle"}}}}"#,
+            r#"{{"product":"herdl","id":"req_clear_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"idle"}}}}"#,
             pane_id
         ),
     );
@@ -2226,7 +2232,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let cleared = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_clear_5","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"herdr:pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_clear_5","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"herdr:pi"}}}}"#,
             pane_id
         ),
     );
@@ -2235,7 +2241,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_clear_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_clear_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             pane_id
         ),
     );
@@ -2282,7 +2288,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_20","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_20","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -2293,7 +2299,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
 
     let panes = send_request(
         &socket_path,
-        r#"{"id":"req_21","method":"pane.list","params":{}}"#,
+        r#"{"product":"herdl","id":"req_21","method":"pane.list","params":{}}"#,
     );
     let pane_id = panes["result"]["panes"][0]["pane_id"]
         .as_str()
@@ -2304,7 +2310,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     let mut reader = open_subscription(
         &socket_path,
         &format!(
-            r#"{{"id":"sub_1","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.output_matched","pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"hello from socket"}}}},{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"idle"}}]}}}}"#,
+            r#"{{"product":"herdl","id":"sub_1","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.output_matched","pane_id":"{}","source":"recent","lines":40,"match":{{"type":"substring","value":"hello from socket"}}}},{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"idle"}}]}}}}"#,
             legacy_pane_id, legacy_pane_id,
         ),
     );
@@ -2316,7 +2322,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     let send_text = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_22","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo hello from socket"}}}}"#,
+            r#"{{"product":"herdl","id":"req_22","method":"pane.send_text","params":{{"pane_id":"{}","text":"echo hello from socket"}}}}"#,
             pane_id
         ),
     );
@@ -2324,7 +2330,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_23","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_23","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -2346,7 +2352,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     let send_pi = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_24","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_24","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
             pane_id
         ),
     );
@@ -2354,7 +2360,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_25","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_25","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             pane_id
         ),
     );
@@ -2410,7 +2416,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_status_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -2426,7 +2432,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let tab_created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
             workspace_id
         ),
     );
@@ -2435,7 +2441,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let mut reader = open_subscription(
         &socket_path,
         &format!(
-            r#"{{"id":"sub_status","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
+            r#"{{"product":"herdl","id":"sub_status","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
             background_pane_id,
         ),
     );
@@ -2446,7 +2452,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let send_pi = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_3","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
+            r#"{{"product":"herdl","id":"req_status_3","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
             background_pane_id
         ),
     );
@@ -2454,7 +2460,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let send_enter = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_4","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            r#"{{"product":"herdl","id":"req_status_4","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
             background_pane_id
         ),
     );
@@ -2469,7 +2475,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let pane = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_5","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_status_5","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             background_pane_id
         ),
     );
@@ -2478,7 +2484,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let mut already_done_reader = open_subscription(
         &socket_path,
         &format!(
-            r#"{{"id":"sub_status_already_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
+            r#"{{"product":"herdl","id":"sub_status_already_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
             background_pane_id,
         ),
     );
@@ -2499,7 +2505,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let tab_focus = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_status_6","method":"tab.focus","params":{{"tab_id":"{}"}}}}"#,
             focused_tab_id
         ),
     );
@@ -2508,7 +2514,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let pane_after_focus = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_status_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            r#"{{"product":"herdl","id":"req_status_7","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
             background_pane_id
         ),
     );
@@ -2533,7 +2539,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     let created = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_meta_sub_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            r#"{{"product":"herdl","id":"req_meta_sub_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
             base.display()
         ),
     );
@@ -2545,7 +2551,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     let report_agent = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_meta_sub_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:pi","agent":"pi","state":"working"}}}}"#,
+            r#"{{"product":"herdl","id":"req_meta_sub_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:pi","agent":"pi","state":"working"}}}}"#,
             pane_id
         ),
     );
@@ -2554,7 +2560,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     let mut done_reader = open_subscription(
         &socket_path,
         &format!(
-            r#"{{"id":"sub_meta_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
+            r#"{{"product":"herdl","id":"sub_meta_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
             pane_id,
         ),
     );
@@ -2565,7 +2571,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     let metadata = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_meta_sub_3","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"filtered out"}}}}"#,
+            r#"{{"product":"herdl","id":"req_meta_sub_3","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"filtered out"}}}}"#,
             pane_id
         ),
     );
@@ -2580,7 +2586,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     let mut reader = open_subscription(
         &socket_path,
         &format!(
-            r#"{{"id":"sub_meta_ttl","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}"}}]}}}}"#,
+            r#"{{"product":"herdl","id":"sub_meta_ttl","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}"}}]}}}}"#,
             pane_id,
         ),
     );
@@ -2591,7 +2597,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     let metadata = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_meta_sub_4","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"short lived","ttl_ms":100}}}}"#,
+            r#"{{"product":"herdl","id":"req_meta_sub_4","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"short lived","ttl_ms":100}}}}"#,
             pane_id
         ),
     );

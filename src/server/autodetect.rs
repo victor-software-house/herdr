@@ -155,6 +155,18 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
     let endpoint_generation =
         capabilities.and_then(|capabilities| capabilities.endpoint_protocol_generation);
     let surface_interest = capabilities.is_some_and(|capabilities| capabilities.surface_interest);
+    if status.protocol != Some(crate::protocol::PROTOCOL_VERSION) {
+        return Err(io::Error::other(format!(
+            "This socket belongs to a different product or private protocol.\n\nserver: v{} protocol {}\nclient: v{} protocol {}",
+            status.version.as_deref().unwrap_or("unknown"),
+            status
+                .protocol
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unavailable".to_string()),
+            crate::build_info::version(),
+            crate::protocol::PROTOCOL_VERSION,
+        )));
+    }
     if endpoint_generation == Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
         && (!saved_federation || surface_interest)
     {
@@ -564,7 +576,7 @@ test "$sid" = "$$"
     }
 
     #[test]
-    fn validate_running_server_compatibility_names_session_commands_for_protocol_mismatch() {
+    fn validate_running_server_compatibility_rejects_official_herdr_protocol() {
         let _guard = env_lock().lock().unwrap();
         let dir = unique_test_dir("named-protocol");
         std::env::set_var("XDG_CONFIG_HOME", &dir);
@@ -581,11 +593,19 @@ test "$sid" = "$$"
                 .read_line(&mut request)
                 .unwrap();
             assert!(request.contains("ping"));
-            let body = format!(
-                "{{\"id\":\"autodetect:server:status\",\"result\":{{\"type\":\"pong\",\"version\":\"0.5.5\",\"protocol\":{}}}}}\n",
-                crate::protocol::PROTOCOL_VERSION + 1
-            );
+            let official_herdr_protocol = 22;
+            assert_ne!(official_herdr_protocol, crate::protocol::PROTOCOL_VERSION);
+            let body = serde_json::json!({
+                "id": "autodetect:server:status",
+                "result": {
+                    "type": "pong",
+                    "version": "0.9.0",
+                    "protocol": official_herdr_protocol,
+                }
+            })
+            .to_string();
             stream.write_all(body.as_bytes()).unwrap();
+            stream.write_all(b"\n").unwrap();
             stream.flush().unwrap();
         });
 
@@ -594,15 +614,11 @@ test "$sid" = "$$"
 
         let _ = handle.join();
         assert!(
-            message.contains("Stop the old server to use the new version"),
+            message.contains("different product or private protocol"),
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("Run `herdl session stop work`"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            message.contains("then run `herdl session attach work` again"),
+            message.contains("protocol 22"),
             "unexpected error: {message}"
         );
         std::env::remove_var("XDG_CONFIG_HOME");

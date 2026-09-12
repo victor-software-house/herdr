@@ -171,7 +171,7 @@ fn spawn_herdr_auto(
 fn ping_socket(socket_path: &Path) -> String {
     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
 
-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
+    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
     writeln!(stream, "{}", request).unwrap();
 
     let mut reader = BufReader::new(stream);
@@ -631,7 +631,7 @@ fn auto_detect_respects_nested_guard_before_auto_attach() {
         let mut stream = UnixStream::connect(&api_socket).unwrap();
         writeln!(
             stream,
-            r#"{{"id":"ws_before","method":"workspace.list","params":{{}}}}"#
+            r#"{{"product":"herdl","id":"ws_before","method":"workspace.list","params":{{}}}}"#
         )
         .unwrap();
         stream
@@ -664,7 +664,7 @@ fn auto_detect_respects_nested_guard_before_auto_attach() {
         let mut stream = UnixStream::connect(&api_socket).unwrap();
         writeln!(
             stream,
-            r#"{{"id":"ws_after","method":"workspace.list","params":{{}}}}"#
+            r#"{{"product":"herdl","id":"ws_after","method":"workspace.list","params":{{}}}}"#
         )
         .unwrap();
         stream

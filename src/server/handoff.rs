@@ -252,6 +252,7 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
             manifest.version
         )));
     }
+    validate_source_protocol(manifest.source_protocol)?;
     if manifest
         .expected_protocol
         .is_some_and(|protocol| protocol != crate::protocol::PROTOCOL_VERSION)
@@ -268,7 +269,7 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
         .is_some_and(|version| version != crate::build_info::version())
     {
         return Err(io::Error::other(format!(
-            "handoff expected herdr v{}, but this server is v{}",
+            "handoff expected HerDL v{}, but this server is v{}",
             manifest.expected_version.as_deref().unwrap_or("unknown"),
             crate::build_info::version()
         )));
@@ -281,6 +282,25 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
         fds,
         stream,
     })
+}
+
+#[cfg(unix)]
+fn validate_source_protocol(source_protocol: u32) -> io::Result<()> {
+    if source_protocol == crate::protocol::PROTOCOL_VERSION {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "handoff source belongs to a different product or private protocol: {source_protocol}"
+    )))
+}
+
+#[cfg(all(test, unix))]
+mod identity_tests {
+    #[test]
+    fn official_herdr_handoff_protocol_is_rejected() {
+        assert!(super::validate_source_protocol(22).is_err());
+        assert!(super::validate_source_protocol(crate::protocol::PROTOCOL_VERSION).is_ok());
+    }
 }
 
 #[cfg(unix)]

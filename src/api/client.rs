@@ -156,7 +156,15 @@ impl From<serde_json::Error> for ApiClientError {
 }
 
 fn write_request(stream: &mut LocalStream, request: &Request) -> Result<(), ApiClientError> {
-    stream.write_all(serde_json::to_string(request)?.as_bytes())?;
+    let mut value = serde_json::to_value(request)?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        ApiClientError::Json(serde_json::Error::io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "API request did not serialize as an object",
+        )))
+    })?;
+    object.insert("product".into(), crate::product::ID.into());
+    stream.write_all(serde_json::to_string(&value)?.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
     Ok(())

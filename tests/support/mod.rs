@@ -13,7 +13,7 @@ static INIT: Once = Once::new();
 static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
 const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
-pub const CURRENT_PROTOCOL: u32 = 22;
+pub const CURRENT_PROTOCOL: u32 = 0x4844_4c00 | 22;
 pub const CURRENT_ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
 pub const SERVER_MESSAGE_SERVER_SHUTDOWN: u32 = 3;
 pub const SERVER_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
@@ -313,7 +313,10 @@ pub fn client_shell_handshake(
     .to_string();
     let hello_payload = encode_varint_enum(
         CLIENT_MESSAGE_ENDPOINT_CONTROL,
-        &[&encode_string("endpoint.hello.v1"), &encode_string(&data)],
+        &[
+            &encode_string("herdl.endpoint.hello.v1"),
+            &encode_string(&data),
+        ],
     );
     let response = read_handshake_response(stream, &hello_payload)?;
     let mut offset = 0;
@@ -325,8 +328,8 @@ pub fn client_shell_handshake(
         ));
     }
     let kind = decode_string(&response, &mut offset)?;
-    if kind != "endpoint.welcome.v1" {
-        return Err(format!("expected endpoint.welcome.v1, got {kind}"));
+    if kind != "herdl.endpoint.welcome.v1" {
+        return Err(format!("expected herdl.endpoint.welcome.v1, got {kind}"));
     }
     let data = decode_string(&response, &mut offset)?;
     let value: serde_json::Value = serde_json::from_str(&data).map_err(|err| err.to_string())?;

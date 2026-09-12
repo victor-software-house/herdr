@@ -144,7 +144,7 @@ fn spawn_server(
 fn ping_socket(socket_path: &Path) -> String {
     let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
 
-    let request = r#"{"id":"1","method":"ping","params":{}}"#;
+    let request = r#"{"product":"herdl","id":"1","method":"ping","params":{}}"#;
     writeln!(stream, "{}", request).unwrap();
 
     let mut reader = BufReader::new(stream);

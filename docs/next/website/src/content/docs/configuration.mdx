@@ -376,6 +376,39 @@ status_indicators = "symbols"
 
 The symbols are static, so this option does not enable spinner animation.
 
+### Collapsed sidebar
+
+The compact desktop sidebar keeps the upstream four-column rail by default. Its
+rightmost column remains reserved as the boundary before pane content, leaving
+three columns for each compact row:
+
+```toml
+[ui.sidebar.collapsed]
+width = 4
+divider = "─"
+toggle = "»"
+
+[ui.sidebar.collapsed.workspaces]
+number_offset = 0
+number_width = 2
+status_offset = 2
+
+[ui.sidebar.collapsed.agents]
+number_offset = 0
+number_width = 2
+status_offset = 2
+```
+
+`width` accepts 2–32 columns. Each row type independently places its numeric
+index and one-column status icon inside the usable `width - 1` columns.
+`number_width = 0` hides the number. Otherwise the number range and status
+column cannot overlap or cross the usable boundary. `divider` and `toggle` must
+each be printable text exactly one terminal column wide.
+
+Workspace and Agent hit targets still cover their complete configured row. The
+toggle hit remains centered in the usable rail. `sidebar_collapsed_mode =
+"hidden"` still uses zero width and ignores this compact geometry.
+
 ### Sidebar row layouts
 
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:

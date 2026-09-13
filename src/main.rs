@@ -242,6 +242,21 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 
 # Collapsed sidebar presentation: "compact" keeps the narrow status rail, "hidden" uses zero width.
 # sidebar_collapsed_mode = "compact"
+#
+# [ui.sidebar.collapsed]
+# width = 4
+# divider = "─"
+# toggle = "»"
+#
+# [ui.sidebar.collapsed.workspaces]
+# number_offset = 0
+# number_width = 2
+# status_offset = 2
+#
+# [ui.sidebar.collapsed.agents]
+# number_offset = 0
+# number_width = 2
+# status_offset = 2
 
 # Terminal width at or below which HerDL uses the mobile single-column layout.
 # Increase this for foldables, tablets, or wide phone terminals.

@@ -50,7 +50,23 @@ fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
 }
 
 #[test]
-fn collapsed_sidebar_insets_single_and_double_digit_workspace_numbers() {
+fn collapsed_sidebar_preserves_upstream_default_columns() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.sidebar_collapsed = true;
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 20).expect("collapsed sidebar");
+    let buffer = frame.to_ratatui_buffer().expect("collapsed sidebar buffer");
+
+    let first = state.hits.workspaces[0].rect;
+    assert_eq!(first.width, 3);
+    assert_eq!(buffer[(first.x, first.y)].symbol(), "1");
+    assert_eq!(buffer[(first.x + 1, first.y)].symbol(), " ");
+    assert_ne!(buffer[(first.x + 2, first.y)].symbol(), " ");
+}
+
+#[test]
+fn collapsed_sidebar_applies_custom_row_columns_and_chrome() {
     let mut projected = snapshot();
     for number in 2..=10 {
         let mut workspace = projected.workspaces[0].clone();
@@ -61,7 +77,26 @@ fn collapsed_sidebar_insets_single_and_double_digit_workspace_numbers() {
         projected.workspaces.push(workspace);
     }
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let config: Config = toml::from_str(
+        r#"
+[ui.sidebar.collapsed]
+width = 5
+divider = "="
+toggle = "<"
+
+[ui.sidebar.collapsed.workspaces]
+number_offset = 1
+number_width = 2
+status_offset = 3
+
+[ui.sidebar.collapsed.agents]
+number_offset = 1
+number_width = 2
+status_offset = 3
+"#,
+    )
+    .unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.sidebar_collapsed = true;
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
@@ -69,14 +104,24 @@ fn collapsed_sidebar_insets_single_and_double_digit_workspace_numbers() {
     let buffer = frame.to_ratatui_buffer().expect("collapsed sidebar buffer");
 
     let first = state.hits.workspaces[0].rect;
+    assert_eq!(first.width, 4);
     assert_eq!(buffer[(first.x, first.y)].symbol(), " ");
     assert_eq!(buffer[(first.x + 1, first.y)].symbol(), "1");
     assert_eq!(buffer[(first.x + 2, first.y)].symbol(), " ");
+    assert_ne!(buffer[(first.x + 3, first.y)].symbol(), " ");
 
     let tenth = state.hits.workspaces[9].rect;
     assert_eq!(buffer[(tenth.x, tenth.y)].symbol(), " ");
     assert_eq!(buffer[(tenth.x + 1, tenth.y)].symbol(), "1");
     assert_eq!(buffer[(tenth.x + 2, tenth.y)].symbol(), "0");
+
+    let (_, divider_y, _) =
+        crate::client::shell::sidebar::collapsed_sidebar_sections(Rect::new(0, 0, 5, 30));
+    assert_eq!(buffer[(0, divider_y.unwrap())].symbol(), "=");
+    assert_eq!(
+        buffer[(state.hits.sidebar_toggle.x, state.hits.sidebar_toggle.y)].symbol(),
+        "<"
+    );
 }
 
 #[test]
@@ -597,15 +642,8 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
         .expect("blocked compact agent")
         .0;
     let row_start = blocked.y as usize * compact.width as usize + blocked.x as usize;
-    assert_eq!(compact.cells[row_start].symbol, " ");
-    assert_ne!(
-        compact.cells[row_start + 1].fg,
-        compact.cells[row_start + 3].fg
-    );
-    assert_eq!(
-        compact.cells[row_start + 1].bg,
-        compact.cells[row_start + 3].bg
-    );
+    assert_ne!(compact.cells[row_start].fg, compact.cells[row_start + 2].fg);
+    assert_eq!(compact.cells[row_start].bg, compact.cells[row_start + 2].bg);
 }
 
 #[test]

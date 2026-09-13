@@ -30,8 +30,8 @@ pub use self::{
         UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
-        SpaceSidebarToken, SpacesSidebarConfig,
+        AgentSidebarToken, AgentsSidebarConfig, CollapsedSidebarConfig, SidebarConfig,
+        SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
@@ -123,7 +123,7 @@ impl Config {
             .chain(self.ui.sound.diagnostics())
             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
             .chain(window_title_diagnostics(&self.ui.window_title))
-            .chain(self.invalid_sidebar_bounds_diagnostic())
+            .chain(self.invalid_sidebar_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
             .collect()
     }
@@ -143,6 +143,11 @@ impl Config {
                 self.server.headless_cols, self.server.headless_rows
             )
         })
+    }
+
+    pub(crate) fn invalid_sidebar_diagnostic(&self) -> Option<String> {
+        self.invalid_sidebar_bounds_diagnostic()
+            .or_else(|| self.ui.sidebar.collapsed.invalid_diagnostic())
     }
 
     pub(crate) fn invalid_sidebar_bounds_diagnostic(&self) -> Option<String> {

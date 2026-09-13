@@ -820,7 +820,7 @@ impl App {
             // On `min > max`, treat the entire `[ui]` section as invalid: keep
             // the previous settings and skip the section so the re-clamp below
             // — and every subsequent render/drag — can never panic.
-            if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
+            if let Some(diagnostic) = config.invalid_sidebar_diagnostic() {
                 diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
             } else {
                 diagnostics.extend(config.ui.sound.diagnostics());

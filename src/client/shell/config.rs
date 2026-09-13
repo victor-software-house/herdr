@@ -112,12 +112,18 @@ impl ClientShellState {
 impl ClientShellConfig {
     pub(crate) fn from_config(config: &Config) -> Self {
         let theme_runtime = crate::app::client_theme_runtime_from_config(config);
+        let collapsed_sidebar = if config.ui.sidebar.collapsed.invalid_diagnostic().is_none() {
+            config.ui.sidebar.collapsed.clone()
+        } else {
+            crate::config::CollapsedSidebarConfig::default()
+        };
         Self {
             sidebar_width: config.ui.sidebar_width,
             sidebar_min_width: config.ui.sidebar_min_width,
             sidebar_max_width: config.ui.sidebar_max_width,
             sidebar_start_collapsed: config.ui.sidebar_start_collapsed,
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
+            collapsed_sidebar,
             mobile_width_threshold: config.ui.mobile_width_threshold,
             tab_bar_position: config.ui.tab_bar_position,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
@@ -311,7 +317,7 @@ impl ClientShellConfig {
         }
 
         if !invalid_section("ui") {
-            if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
+            if let Some(diagnostic) = config.invalid_sidebar_diagnostic() {
                 diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
             } else {
                 let ui = &config.ui;
@@ -320,6 +326,7 @@ impl ClientShellConfig {
                 self.sidebar_min_width = ui.sidebar_min_width;
                 self.sidebar_max_width = ui.sidebar_max_width;
                 self.sidebar_collapsed_mode = ui.sidebar_collapsed_mode;
+                self.collapsed_sidebar = ui.sidebar.collapsed.clone();
                 self.mobile_width_threshold = ui.mobile_width_threshold;
                 self.tab_bar_position = ui.tab_bar_position;
                 self.hide_tab_bar_when_single_tab = ui.hide_tab_bar_when_single_tab;
@@ -377,7 +384,7 @@ impl ClientShellConfig {
 
         let sidebar_width = if sidebar_collapsed {
             match self.sidebar_collapsed_mode {
-                SidebarCollapsedModeConfig::Compact => 5,
+                SidebarCollapsedModeConfig::Compact => self.collapsed_sidebar.width,
                 SidebarCollapsedModeConfig::Hidden => 0,
             }
         } else {
@@ -455,6 +462,7 @@ mod tests {
         let mut shell = ClientShellConfig::from_config(&Config::default());
         let mut next = Config::default();
         next.ui.sidebar_width = 31;
+        next.ui.sidebar.collapsed.width = 6;
         next.ui.tab_bar_position = TabBarPositionConfig::Bottom;
         next.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
@@ -465,6 +473,7 @@ mod tests {
 
         assert!(diagnostics.is_empty());
         assert_eq!(shell.sidebar_width, 31);
+        assert_eq!(shell.collapsed_sidebar.width, 6);
         assert_eq!(shell.tab_bar_position, TabBarPositionConfig::Bottom);
         assert_eq!(
             shell.agent_panel_sort,
@@ -493,6 +502,22 @@ mod tests {
             shell.keybinds.prefix,
             (KeyCode::Char('a'), KeyModifiers::CONTROL)
         );
+    }
+
+    #[test]
+    fn live_reload_preserves_ui_when_collapsed_geometry_is_invalid() {
+        let mut shell = ClientShellConfig::from_config(&Config::default());
+        let previous = shell.collapsed_sidebar.clone();
+        let mut invalid = Config::default();
+        invalid.ui.sidebar.collapsed.width = 2;
+
+        let diagnostics = shell.apply_live_config(&invalid, &[], &[]);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("collapsed.workspaces")
+                && diagnostic.contains("keeping previous [ui] settings")
+        }));
+        assert_eq!(shell.collapsed_sidebar, previous);
     }
 
     #[test]

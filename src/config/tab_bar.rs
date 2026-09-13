@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthStr;
 
 pub(crate) const DEFAULT_TAB_BAR_COMMAND_INTERVAL_SECONDS: u64 = 5;
 pub(crate) const DEFAULT_TAB_BAR_COMMAND_TIMEOUT_SECONDS: u64 = 2;
@@ -37,6 +38,172 @@ pub enum TabBarRightEntryConfig {
         #[serde(default = "default_command_timeout_seconds")]
         timeout_seconds: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabLabelAlignmentConfig {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct TabStripText(String);
+
+impl TabStripText {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn width(&self) -> u16 {
+        UnicodeWidthStr::width(self.0.as_str()).min(u16::MAX as usize) as u16
+    }
+}
+
+impl<'de> Deserialize<'de> for TabStripText {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty() || value.chars().any(char::is_control) {
+            return Err(serde::de::Error::custom(
+                "tab strip text must be non-empty printable text",
+            ));
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TabStripControlConfig {
+    pub width: u16,
+    pub label: TabStripText,
+}
+
+impl Default for TabStripControlConfig {
+    fn default() -> Self {
+        Self {
+            width: 3,
+            label: TabStripText(" + ".into()),
+        }
+    }
+}
+
+impl TabStripControlConfig {
+    fn validate(&self, path: &str) -> Option<String> {
+        if !(1..=16).contains(&self.width) {
+            return Some(format!("{path}.width must be between 1 and 16"));
+        }
+        (self.label.width() > self.width).then(|| {
+            format!(
+                "{path}.label is {} columns wide but width is {}",
+                self.label.width(),
+                self.width
+            )
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TabStripScrollConfig {
+    pub width: u16,
+    pub left: TabStripText,
+    pub right: TabStripText,
+}
+
+impl Default for TabStripScrollConfig {
+    fn default() -> Self {
+        Self {
+            width: 3,
+            left: TabStripText(" < ".into()),
+            right: TabStripText(" > ".into()),
+        }
+    }
+}
+
+impl TabStripScrollConfig {
+    fn validate(&self) -> Option<String> {
+        if !(1..=16).contains(&self.width) {
+            return Some("ui.tab_strip.scroll.width must be between 1 and 16".into());
+        }
+        for (name, label) in [("left", &self.left), ("right", &self.right)] {
+            if label.width() > self.width {
+                return Some(format!(
+                    "ui.tab_strip.scroll.{name} is {} columns wide but scroll width is {}",
+                    label.width(),
+                    self.width
+                ));
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TabStripConfig {
+    pub min_tab_width: u16,
+    pub label_padding_left: u16,
+    pub label_padding_right: u16,
+    pub label_alignment: TabLabelAlignmentConfig,
+    pub gap: u16,
+    pub scroll: TabStripScrollConfig,
+    pub new_tab: TabStripControlConfig,
+    pub overflow_indicator: TabStripText,
+    pub drop_indicator: TabStripText,
+    pub status_gap: u16,
+}
+
+impl Default for TabStripConfig {
+    fn default() -> Self {
+        Self {
+            min_tab_width: 8,
+            label_padding_left: 2,
+            label_padding_right: 2,
+            label_alignment: TabLabelAlignmentConfig::Center,
+            gap: 1,
+            scroll: TabStripScrollConfig::default(),
+            new_tab: TabStripControlConfig::default(),
+            overflow_indicator: TabStripText("…".into()),
+            drop_indicator: TabStripText("│".into()),
+            status_gap: 1,
+        }
+    }
+}
+
+impl TabStripConfig {
+    pub(crate) fn invalid_diagnostic(&self) -> Option<String> {
+        if !(1..=64).contains(&self.min_tab_width) {
+            return Some("ui.tab_strip.min_tab_width must be between 1 and 64".into());
+        }
+        if self.label_padding_left > 32 || self.label_padding_right > 32 {
+            return Some("ui.tab_strip label padding may be at most 32 columns per side".into());
+        }
+        if self.gap > 16 || self.status_gap > 16 {
+            return Some("ui.tab_strip gap and status_gap may be at most 16 columns".into());
+        }
+        if self.overflow_indicator.width() != 1 || self.drop_indicator.width() != 1 {
+            return Some(
+                "ui.tab_strip overflow_indicator and drop_indicator must each be one column wide"
+                    .into(),
+            );
+        }
+        self.scroll
+            .validate()
+            .or_else(|| self.new_tab.validate("ui.tab_strip.new_tab"))
+    }
+
+    pub(crate) fn minimum_overflow_width(&self) -> u16 {
+        self.min_tab_width
+            .saturating_add(self.new_tab.width)
+            .saturating_add(self.scroll.width.saturating_mul(2))
+    }
 }
 
 pub(crate) fn parse_tab_bar_datetime_format(
@@ -115,6 +282,84 @@ pub(crate) fn tab_bar_right_diagnostics(entries: &[TabBarRightEntryConfig]) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_strip_defaults_match_upstream_chrome() {
+        let strip = TabStripConfig::default();
+        assert_eq!(strip.min_tab_width, 8);
+        assert_eq!(strip.label_padding_left, 2);
+        assert_eq!(strip.label_padding_right, 2);
+        assert_eq!(strip.label_alignment, TabLabelAlignmentConfig::Center);
+        assert_eq!(strip.gap, 1);
+        assert_eq!(strip.scroll.width, 3);
+        assert_eq!(strip.scroll.left.as_str(), " < ");
+        assert_eq!(strip.scroll.right.as_str(), " > ");
+        assert_eq!(strip.new_tab.width, 3);
+        assert_eq!(strip.new_tab.label.as_str(), " + ");
+        assert_eq!(strip.status_gap, 1);
+        assert!(strip.invalid_diagnostic().is_none());
+    }
+
+    #[test]
+    fn tab_strip_parses_custom_bounded_fields() {
+        let strip: TabStripConfig = toml::from_str(
+            r#"
+min_tab_width = 5
+label_padding_left = 1
+label_padding_right = 0
+label_alignment = "left"
+gap = 0
+overflow_indicator = "~"
+drop_indicator = "!"
+status_gap = 2
+
+[scroll]
+width = 2
+left = "<<"
+right = ">>"
+
+[new_tab]
+width = 1
+label = "+"
+"#,
+        )
+        .unwrap();
+        assert_eq!(strip.label_alignment, TabLabelAlignmentConfig::Left);
+        assert_eq!(strip.scroll.left.as_str(), "<<");
+        assert_eq!(strip.new_tab.label.as_str(), "+");
+        assert!(strip.invalid_diagnostic().is_none());
+    }
+
+    #[test]
+    fn tab_strip_diagnostics_reject_invalid_geometry() {
+        let mut strip: TabStripConfig = toml::from_str("min_tab_width = 0\n").unwrap();
+        assert!(strip
+            .invalid_diagnostic()
+            .unwrap()
+            .contains("min_tab_width"));
+
+        strip = toml::from_str("[scroll]\nwidth = 1\nleft = '<<'\n").unwrap();
+        assert!(strip.invalid_diagnostic().unwrap().contains("scroll.left"));
+
+        strip = toml::from_str("overflow_indicator = 'wide'\n").unwrap();
+        assert!(strip.invalid_diagnostic().unwrap().contains("one column"));
+
+        strip = toml::from_str("[new_tab]\nwidth = 1\nlabel = ' + '\n").unwrap();
+        assert!(strip
+            .invalid_diagnostic()
+            .unwrap()
+            .contains("new_tab.label"));
+    }
+
+    #[test]
+    fn tab_strip_rejects_empty_or_control_text() {
+        for input in [
+            "overflow_indicator = ''\n",
+            "drop_indicator = \"\\u0007\"\n",
+        ] {
+            assert!(toml::from_str::<TabStripConfig>(input).is_err());
+        }
+    }
 
     #[test]
     fn tab_bar_entries_parse_with_command_defaults() {

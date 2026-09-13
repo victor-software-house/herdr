@@ -1058,6 +1058,85 @@
           ]
         },
         {
+          "key": "ui.tab_strip.min_tab_width",
+          "type": "integer",
+          "default": "8",
+          "description": "Minimum width of each desktop tab hit rectangle. Accepts 1–64."
+        },
+        {
+          "key": "ui.tab_strip.label_padding_left",
+          "type": "integer",
+          "default": "2",
+          "description": "Minimum left padding inside each desktop tab. Accepts 0–32."
+        },
+        {
+          "key": "ui.tab_strip.label_padding_right",
+          "type": "integer",
+          "default": "2",
+          "description": "Minimum right padding inside each desktop tab. Accepts 0–32."
+        },
+        {
+          "key": "ui.tab_strip.label_alignment",
+          "type": "enum",
+          "default": "\"center\"",
+          "description": "Alignment for extra space inside a desktop tab.",
+          "values": ["left", "center", "right"]
+        },
+        {
+          "key": "ui.tab_strip.gap",
+          "type": "integer",
+          "default": "1",
+          "description": "Blank columns between desktop tab hit rectangles. Accepts 0–16."
+        },
+        {
+          "key": "ui.tab_strip.scroll.width",
+          "type": "integer",
+          "default": "3",
+          "description": "Width of each overflow scroll control and its hit rectangle. Accepts 1–16."
+        },
+        {
+          "key": "ui.tab_strip.scroll.left",
+          "type": "string",
+          "default": "\" < \"",
+          "description": "Printable label for the left tab-scroll control; must fit its width."
+        },
+        {
+          "key": "ui.tab_strip.scroll.right",
+          "type": "string",
+          "default": "\" > \"",
+          "description": "Printable label for the right tab-scroll control; must fit its width."
+        },
+        {
+          "key": "ui.tab_strip.new_tab.width",
+          "type": "integer",
+          "default": "3",
+          "description": "Width of the new-tab control and its hit rectangle. Accepts 1–16."
+        },
+        {
+          "key": "ui.tab_strip.new_tab.label",
+          "type": "string",
+          "default": "\" + \"",
+          "description": "Printable new-tab control label; must fit its width."
+        },
+        {
+          "key": "ui.tab_strip.overflow_indicator",
+          "type": "string",
+          "default": "\"…\"",
+          "description": "Printable single-column marker for hidden tabs."
+        },
+        {
+          "key": "ui.tab_strip.drop_indicator",
+          "type": "string",
+          "default": "\"│\"",
+          "description": "Printable single-column tab drag-and-drop insertion marker."
+        },
+        {
+          "key": "ui.tab_strip.status_gap",
+          "type": "integer",
+          "default": "1",
+          "description": "Blank columns reserved before the right-side tab status area. Accepts 0–16."
+        },
+        {
           "key": "ui.tab_bar_right",
           "type": "array",
           "default": "[]",

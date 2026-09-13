@@ -45,6 +45,75 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
 }
 
 #[test]
+fn tab_bar_preserves_upstream_label_padding_and_inter_tab_gap() {
+    let mut projected = snapshot();
+    projected.tabs[0].label = "artifact-track".into();
+    projected.tabs[0].custom_label = true;
+    let mut second = projected.tabs[0].clone();
+    second.tab_id = "tab_2".into();
+    second.number = 2;
+    second.label = "rendered-markdown".into();
+    second.focused = false;
+    projected.tabs.push(second);
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 20).expect("two custom tabs");
+
+    let first = state.hits.tabs[0].0;
+    let second = state.hits.tabs[1].0;
+    assert_eq!(first.width, 18);
+    assert_eq!(second.x, first.right() + 1);
+
+    let row_start = first.y as usize * frame.width as usize + first.x as usize;
+    let text = frame.cells[row_start..row_start + first.width as usize]
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert_eq!(text, "  artifact-track  ");
+}
+
+#[test]
+fn tab_bar_applies_custom_label_padding_and_inter_tab_gap() {
+    let mut projected = snapshot();
+    projected.tabs[0].label = "artifact-track".into();
+    projected.tabs[0].custom_label = true;
+    let mut second = projected.tabs[0].clone();
+    second.tab_id = "tab_2".into();
+    second.number = 2;
+    second.label = "rendered-markdown".into();
+    second.focused = false;
+    projected.tabs.push(second);
+
+    let config: Config = toml::from_str(
+        r#"
+[ui.tab_strip]
+label_padding_left = 1
+label_padding_right = 1
+gap = 0
+"#,
+    )
+    .unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 20).expect("two custom tabs");
+
+    let first = state.hits.tabs[0].0;
+    let second = state.hits.tabs[1].0;
+    assert_eq!(first.width, 16);
+    assert_eq!(second.x, first.right());
+
+    let row_start = first.y as usize * frame.width as usize + first.x as usize;
+    let text = frame.cells[row_start..row_start + first.width as usize]
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert_eq!(text, " artifact-track ");
+}
+
+#[test]
 fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     let path = std::env::temp_dir().join(format!(
         "herdr-client-shell-prefs-{}.json",
@@ -101,6 +170,79 @@ fn manual_client_chrome_preferences_round_trip_per_endpoint() {
 }
 
 #[test]
+fn tab_bar_custom_controls_match_their_hit_rectangles() {
+    let mut projected = snapshot();
+    projected.tab_bar_right = vec![crate::protocol::ClientShellTabStatusSegment {
+        text: "host".into(),
+        accent: false,
+    }];
+    for number in 2..=9 {
+        let mut tab = projected.tabs[0].clone();
+        tab.tab_id = format!("tab_{number}");
+        tab.number = number;
+        tab.label = format!("tab-{number}");
+        tab.focused = false;
+        projected.tabs.push(tab);
+    }
+    let config: Config = toml::from_str(
+        r#"
+[ui.tab_strip]
+min_tab_width = 6
+gap = 0
+status_gap = 2
+overflow_indicator = "~"
+drop_indicator = "!"
+
+[ui.tab_strip.scroll]
+width = 2
+left = "<<"
+right = ">>"
+
+[ui.tab_strip.new_tab]
+width = 1
+label = "+"
+"#,
+    )
+    .unwrap();
+    let mut shell = ClientShellConfig::from_config(&config);
+    shell.mobile_width_threshold = 0;
+    let mut state = ClientShellState::new(shell);
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(45, 20).expect("custom overflow controls");
+    let top = frame.cells[..frame.width as usize]
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+
+    assert_eq!(state.hits.tab_scroll_left.width, 2);
+    assert_eq!(state.hits.tab_scroll_right.width, 2);
+    assert_eq!(state.hits.new_tab.width, 1);
+    let symbols = |rect: Rect| {
+        frame.cells[rect.x as usize..rect.right() as usize]
+            .iter()
+            .map(|cell| cell.symbol.as_str())
+            .collect::<String>()
+    };
+    assert_eq!(symbols(state.hits.tab_scroll_left), "<<");
+    assert_eq!(symbols(state.hits.tab_scroll_right), ">>");
+    assert_eq!(symbols(state.hits.new_tab), "+");
+    assert!(top.contains('~'));
+    let status_x = frame.cells[..frame.width as usize]
+        .windows(4)
+        .position(|cells| {
+            cells
+                .iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+                == "host"
+        })
+        .unwrap();
+    assert_eq!(frame.cells[status_x - 1].symbol, " ");
+    assert_eq!(frame.cells[status_x - 2].symbol, " ");
+}
+
+#[test]
 fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
     let mut projected = snapshot();
     projected.tab_bar_right = vec![
@@ -114,7 +256,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
         },
     ];
     projected.tab_bar_right_separator = " · ".into();
-    for number in 2..=8 {
+    for number in 2..=9 {
         projected.tabs.push(ClientShellTab {
             tab_id: format!("tab_{number}"),
             workspace_id: "ws_1".into(),
@@ -142,7 +284,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
     state.tab_scroll = usize::MAX;
     state.reveal_focused_tab = false;
     state.compose(106, 20).expect("clamped tab scroll");
-    assert!(state.tab_scroll < 7);
+    assert!(state.tab_scroll < 8);
     let manual_scroll = state.tab_scroll;
     let mut replacement = (**state.snapshot.as_ref().expect("snapshot")).clone();
     replacement.revision = 2;

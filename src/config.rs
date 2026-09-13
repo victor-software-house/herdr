@@ -34,7 +34,7 @@ pub use self::{
         SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
-    tab_bar::TabBarRightEntryConfig,
+    tab_bar::{TabBarRightEntryConfig, TabLabelAlignmentConfig, TabStripConfig},
     theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig, THEME_NAMES},
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };
@@ -123,7 +123,7 @@ impl Config {
             .chain(self.ui.sound.diagnostics())
             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
             .chain(window_title_diagnostics(&self.ui.window_title))
-            .chain(self.invalid_sidebar_diagnostic())
+            .chain(self.invalid_ui_layout_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
             .collect()
     }
@@ -145,9 +145,10 @@ impl Config {
         })
     }
 
-    pub(crate) fn invalid_sidebar_diagnostic(&self) -> Option<String> {
+    pub(crate) fn invalid_ui_layout_diagnostic(&self) -> Option<String> {
         self.invalid_sidebar_bounds_diagnostic()
             .or_else(|| self.ui.sidebar.collapsed.invalid_diagnostic())
+            .or_else(|| self.ui.tab_strip.invalid_diagnostic())
     }
 
     pub(crate) fn invalid_sidebar_bounds_diagnostic(&self) -> Option<String> {

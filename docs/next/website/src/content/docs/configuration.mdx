@@ -332,6 +332,40 @@ The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
 
+The desktop tab strip preserves upstream spacing by default and exposes its
+bounded layout and controls:
+
+```toml
+[ui.tab_strip]
+min_tab_width = 8
+label_padding_left = 2
+label_padding_right = 2
+label_alignment = "center"
+gap = 1
+overflow_indicator = "…"
+drop_indicator = "│"
+status_gap = 1
+
+[ui.tab_strip.scroll]
+width = 3
+left = " < "
+right = " > "
+
+[ui.tab_strip.new_tab]
+width = 3
+label = " + "
+```
+
+`min_tab_width` accepts 1–64. Per-side label padding accepts 0–32, and
+`label_alignment` is `"left"`, `"center"`, or `"right"`. `gap` controls empty
+columns between tab hit rectangles. Scroll and new-tab control widths accept
+1–16; each printable label must fit its configured hit width.
+`overflow_indicator` and `drop_indicator` must each occupy exactly one terminal
+column. `status_gap` reserves 0–16 blank columns before the right-side status
+area. When status would leave less than one minimum tab plus both scroll
+controls and the new-tab control, tabs keep the complete row and the status
+area yields.
+
 Configure an ordered tmux-style status area at the right edge of the tab row:
 
 ```toml

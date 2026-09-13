@@ -74,6 +74,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) sidebar_max_width: u16,
     pub(super) sidebar_start_collapsed: bool,
     pub(super) sidebar_collapsed_mode: SidebarCollapsedModeConfig,
+    pub(super) collapsed_sidebar: crate::config::CollapsedSidebarConfig,
     pub(super) mobile_width_threshold: u16,
     pub(super) tab_bar_position: TabBarPositionConfig,
     pub(super) hide_tab_bar_when_single_tab: bool,

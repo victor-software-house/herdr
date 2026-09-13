@@ -68,20 +68,27 @@ pub(crate) fn render_collapsed_sidebar(
         } else {
             Style::default().fg(palette.overlay0)
         };
+        let row = config.collapsed_sidebar.workspaces;
         put_text(
             buffer,
-            rect.x,
+            rect.x.saturating_add(row.number_offset),
             rect.y,
-            rect.width.min(2),
-            &format!("{:<2}", index + 1),
+            rect.width
+                .saturating_sub(row.number_offset)
+                .min(row.number_width),
+            &format!(
+                "{:<width$}",
+                index + 1,
+                width = usize::from(row.number_width)
+            ),
             number_style,
         );
         let status = workspace.agent_status;
         put_text(
             buffer,
-            rect.x.saturating_add(2),
+            rect.x.saturating_add(row.status_offset),
             rect.y,
-            rect.width.saturating_sub(2),
+            rect.width.saturating_sub(row.status_offset),
             status_icon(status, config.status_indicators),
             Style::default().fg(status_color(status, palette)),
         );
@@ -100,7 +107,11 @@ pub(crate) fn render_collapsed_sidebar(
             workspace_area.x,
             divider_y,
             workspace_area.width,
-            &"─".repeat(workspace_area.width as usize),
+            &config
+                .collapsed_sidebar
+                .divider
+                .as_str()
+                .repeat(workspace_area.width as usize),
             Style::default().fg(palette.surface_dim),
         );
     }
@@ -132,12 +143,19 @@ pub(crate) fn render_collapsed_sidebar(
         if agent.focused {
             buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
         }
+        let row = config.collapsed_sidebar.agents;
         put_text(
             buffer,
-            rect.x,
+            rect.x.saturating_add(row.number_offset),
             rect.y,
-            rect.width.min(2),
-            &format!("{:<2}", index + 1),
+            rect.width
+                .saturating_sub(row.number_offset)
+                .min(row.number_width),
+            &format!(
+                "{:<width$}",
+                index + 1,
+                width = usize::from(row.number_width)
+            ),
             Style::default().fg(if agent.focused {
                 palette.text
             } else {
@@ -146,9 +164,9 @@ pub(crate) fn render_collapsed_sidebar(
         );
         put_text(
             buffer,
-            rect.x.saturating_add(2),
+            rect.x.saturating_add(row.status_offset),
             rect.y,
-            rect.width.saturating_sub(2),
+            rect.width.saturating_sub(row.status_offset),
             status_icon(agent.agent_status, config.status_indicators),
             Style::default().fg(status_color(agent.agent_status, palette)),
         );
@@ -169,7 +187,7 @@ pub(crate) fn render_collapsed_sidebar(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "»",
+        config.collapsed_sidebar.toggle.as_str(),
         if super::super::global_menu::global_menu_attention(snapshot) {
             Style::default()
                 .fg(palette.accent)

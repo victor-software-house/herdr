@@ -888,6 +888,60 @@
           ]
         },
         {
+          "key": "ui.sidebar.collapsed.width",
+          "type": "integer",
+          "default": "4",
+          "description": "Total compact sidebar width. Accepts 2–32; the rightmost column remains the pane boundary."
+        },
+        {
+          "key": "ui.sidebar.collapsed.divider",
+          "type": "string",
+          "default": "\"─\"",
+          "description": "Printable single-column glyph repeated across the compact workspace/agent divider."
+        },
+        {
+          "key": "ui.sidebar.collapsed.toggle",
+          "type": "string",
+          "default": "\"»\"",
+          "description": "Printable single-column glyph used for the compact sidebar toggle."
+        },
+        {
+          "key": "ui.sidebar.collapsed.workspaces.number_offset",
+          "type": "integer",
+          "default": "0",
+          "description": "Zero-based compact workspace number column offset."
+        },
+        {
+          "key": "ui.sidebar.collapsed.workspaces.number_width",
+          "type": "integer",
+          "default": "2",
+          "description": "Compact workspace number width. Zero hides the number."
+        },
+        {
+          "key": "ui.sidebar.collapsed.workspaces.status_offset",
+          "type": "integer",
+          "default": "2",
+          "description": "Zero-based compact workspace status-icon column offset."
+        },
+        {
+          "key": "ui.sidebar.collapsed.agents.number_offset",
+          "type": "integer",
+          "default": "0",
+          "description": "Zero-based compact agent number column offset."
+        },
+        {
+          "key": "ui.sidebar.collapsed.agents.number_width",
+          "type": "integer",
+          "default": "2",
+          "description": "Compact agent number width. Zero hides the number."
+        },
+        {
+          "key": "ui.sidebar.collapsed.agents.status_offset",
+          "type": "integer",
+          "default": "2",
+          "description": "Zero-based compact agent status-icon column offset."
+        },
+        {
           "key": "ui.mobile_width_threshold",
           "type": "integer",
           "default": "64",

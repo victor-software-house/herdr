@@ -5,6 +5,7 @@ pub use rules::SidebarTokenRule;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthStr;
 
 use crate::detect::Agent;
 
@@ -401,6 +402,106 @@ impl<'de> Deserialize<'de> for SpaceSidebarToken {
 type AgentSidebarRows = Vec<Vec<AgentSidebarToken>>;
 type SpaceSidebarRows = Vec<Vec<SpaceSidebarToken>>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct CollapsedSidebarGlyph(String);
+
+impl CollapsedSidebarGlyph {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for CollapsedSidebarGlyph {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value.chars().any(char::is_control) || UnicodeWidthStr::width(value.as_str()) != 1 {
+            return Err(serde::de::Error::custom(
+                "collapsed sidebar glyph must be printable text exactly one column wide",
+            ));
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CollapsedSidebarRowConfig {
+    pub number_offset: u16,
+    pub number_width: u16,
+    pub status_offset: u16,
+}
+
+impl Default for CollapsedSidebarRowConfig {
+    fn default() -> Self {
+        Self {
+            number_offset: 0,
+            number_width: 2,
+            status_offset: 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CollapsedSidebarConfig {
+    pub width: u16,
+    pub divider: CollapsedSidebarGlyph,
+    pub toggle: CollapsedSidebarGlyph,
+    pub workspaces: CollapsedSidebarRowConfig,
+    pub agents: CollapsedSidebarRowConfig,
+}
+
+impl Default for CollapsedSidebarConfig {
+    fn default() -> Self {
+        Self {
+            width: 4,
+            divider: CollapsedSidebarGlyph("─".into()),
+            toggle: CollapsedSidebarGlyph("»".into()),
+            workspaces: CollapsedSidebarRowConfig::default(),
+            agents: CollapsedSidebarRowConfig::default(),
+        }
+    }
+}
+
+impl CollapsedSidebarConfig {
+    pub(crate) fn invalid_diagnostic(&self) -> Option<String> {
+        if !(2..=32).contains(&self.width) {
+            return Some(format!(
+                "ui.sidebar.collapsed.width must be between 2 and 32 (got {})",
+                self.width
+            ));
+        }
+        let usable_width = self.width - 1;
+        for (label, row) in [("workspaces", self.workspaces), ("agents", self.agents)] {
+            let Some(number_end) = row.number_offset.checked_add(row.number_width) else {
+                return Some(format!(
+                    "ui.sidebar.collapsed.{label} number columns exceed usable width {usable_width}"
+                ));
+            };
+            if number_end > usable_width {
+                return Some(format!(
+                    "ui.sidebar.collapsed.{label} number columns exceed usable width {usable_width}"
+                ));
+            }
+            if row.status_offset >= usable_width {
+                return Some(format!(
+                    "ui.sidebar.collapsed.{label}.status_offset must be below usable width {usable_width}"
+                ));
+            }
+            if row.number_width > 0 && row.status_offset < number_end {
+                return Some(format!(
+                    "ui.sidebar.collapsed.{label} number and status columns overlap"
+                ));
+            }
+        }
+        None
+    }
+}
+
 fn deserialize_rows_by_agent<'de, D>(
     deserializer: D,
 ) -> Result<BTreeMap<String, AgentSidebarRows>, D::Error>
@@ -480,11 +581,98 @@ impl Default for SpacesSidebarConfig {
 pub struct SidebarConfig {
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+    pub collapsed: CollapsedSidebarConfig,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collapsed_sidebar_defaults_match_upstream_compact_geometry() {
+        let collapsed = CollapsedSidebarConfig::default();
+        assert_eq!(collapsed.width, 4);
+        assert_eq!(collapsed.workspaces, CollapsedSidebarRowConfig::default());
+        assert_eq!(collapsed.agents, CollapsedSidebarRowConfig::default());
+        assert_eq!(collapsed.divider.as_str(), "─");
+        assert_eq!(collapsed.toggle.as_str(), "»");
+        assert!(collapsed.invalid_diagnostic().is_none());
+    }
+
+    #[test]
+    fn collapsed_sidebar_parses_valid_custom_geometry_and_chrome() {
+        let config: SidebarConfig = toml::from_str(
+            r#"
+[collapsed]
+width = 5
+divider = "="
+toggle = "<"
+
+[collapsed.workspaces]
+number_offset = 1
+number_width = 2
+status_offset = 3
+
+[collapsed.agents]
+number_offset = 0
+number_width = 1
+status_offset = 2
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.collapsed.width, 5);
+        assert_eq!(config.collapsed.workspaces.number_offset, 1);
+        assert_eq!(config.collapsed.agents.number_width, 1);
+        assert_eq!(config.collapsed.divider.as_str(), "=");
+        assert_eq!(config.collapsed.toggle.as_str(), "<");
+        assert!(config.collapsed.invalid_diagnostic().is_none());
+    }
+
+    #[test]
+    fn collapsed_sidebar_rejects_out_of_bounds_and_overlapping_columns() {
+        let collapsed = CollapsedSidebarConfig {
+            width: 1,
+            ..CollapsedSidebarConfig::default()
+        };
+        assert!(collapsed
+            .invalid_diagnostic()
+            .unwrap()
+            .contains("between 2 and 32"));
+
+        let collapsed = CollapsedSidebarConfig {
+            workspaces: CollapsedSidebarRowConfig {
+                status_offset: 1,
+                ..CollapsedSidebarRowConfig::default()
+            },
+            ..CollapsedSidebarConfig::default()
+        };
+        assert!(collapsed.invalid_diagnostic().unwrap().contains("overlap"));
+
+        let collapsed = CollapsedSidebarConfig {
+            agents: CollapsedSidebarRowConfig {
+                number_offset: u16::MAX,
+                ..CollapsedSidebarRowConfig::default()
+            },
+            ..CollapsedSidebarConfig::default()
+        };
+        assert!(collapsed
+            .invalid_diagnostic()
+            .unwrap()
+            .contains("exceed usable width"));
+    }
+
+    #[test]
+    fn collapsed_sidebar_glyphs_must_be_one_printable_column() {
+        for value in ["", "ab", "界", "\n"] {
+            let input = format!("[collapsed]\ndivider = {value:?}\n");
+            assert!(
+                toml::from_str::<SidebarConfig>(&input).is_err(),
+                "{value:?}"
+            );
+        }
+        let valid: SidebarConfig = toml::from_str("[collapsed]\ndivider = \"·\"\n").unwrap();
+        assert_eq!(valid.collapsed.divider.as_str(), "·");
+    }
 
     #[test]
     fn defaults_match_the_compact_agent_and_existing_space_layouts() {

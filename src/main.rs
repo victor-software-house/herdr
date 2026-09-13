@@ -119,14 +119,14 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 # kitty_graphics = true
 
 [update]
-# Update channel used by background version checks and `herdl update`.
-# HerDL update channels remain unavailable until the VSH release channel is published.
+# VSH HerDL update channel used by background version checks and `herdl update`.
+# Both channel names resolve only to checksum-pinned victor-software-house/herdr assets.
 # channel = "stable"
 
-# Automatic version checks are disabled until the VSH release channel is published.
-# version_check = false
+# Check the VSH HerDL release channel automatically.
+# version_check = true
 
-# Automatic manifest checks are disabled until the VSH catalog is published.
+# Automatic detection-manifest checks remain disabled until the VSH catalog is published.
 # manifest_check = false
 
 [keys]

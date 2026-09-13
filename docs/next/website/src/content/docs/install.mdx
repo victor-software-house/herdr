@@ -113,15 +113,15 @@ If your shell cannot find `herdr`, restart the terminal or check that the instal
 
 ## Update
 
-Herdr checks for new releases and notifies you in the app. You can update manually:
+HerDL checks the VSH-owned `victor-software-house/herdr` release channel and notifies you when a newer exact downstream build is available. Every build keeps the upstream base version and adds its provenance as `<base>-vsh.<commit>`. Update manually with:
 
 ```bash
-herdr update
+herdl update
 ```
 
-Use `herdr update` only for installs managed by Herdr's own installer. Update Homebrew, mise, and Nix installs through those package managers instead.
+Use `herdl update` only for standalone HerDL installs. Package-managed installations must update through their package manager. The updater accepts only checksum-pinned `herdl-*` assets from the VSH repository and replaces only the running `herdl` executable.
 
-Direct installs on Linux, macOS, and Windows use the stable update channel by default. To opt into preview builds from `master`, set the channel:
+VSH direct releases provide Linux x86_64, Linux aarch64, and native macOS arm64 binaries. Windows artifacts are not published. The stable channel is the default. To select the separately addressed VSH preview manifest, run:
 
 ```bash
 herdr channel set preview
@@ -135,11 +135,9 @@ herdr channel set stable
 
 For direct installs, changing channels checks the selected channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
 
-Preview builds are regularly published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
+The initial VSH publication points stable and preview at the same exact downstream build. Both manifests remain isolated from upstream Herdr releases.
 
-Stable is the recommended channel for normal Windows use. Preview receives fixes sooner but can regress, so opt in only when you want that tradeoff. Existing Windows preview installs remain on preview until you switch them explicitly. If an older preview build rejects `herdr channel set stable`, run `herdr update` once on preview, then retry the channel switch.
-
-By default, `herdr update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start Herdr again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.
+By default, `herdl update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start HerDL again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.
 
 To opt into experimental live server handoff for supported running sessions, run:
 
@@ -147,8 +145,8 @@ To opt into experimental live server handoff for supported running sessions, run
 herdr update --handoff
 ```
 
-Live handoff does not apply to Homebrew, mise, or Nix package-manager updates. For those installs, update with the package manager, then run Herdr again to reconnect with the updated client. The compatible old server keeps running. Restart it later with `herdr server stop` or `herdr session stop <name>` only when you want server-side changes from the new release.
+Live handoff does not apply to package-manager updates. For those installs, update with the package manager, then run HerDL again to reconnect with the updated client. The compatible old server keeps running. Restart it later with `herdr server stop` or `herdr session stop <name>` only when you want server-side changes from the new release.
 
 ## Requirements
 
-Stable-channel binaries are available for Linux, macOS, and Windows x86_64. See [Windows support](/docs/windows-beta/) for supported workflows and known limitations. Windows ARM64 runs the x86_64 build under Windows emulation.
+VSH HerDL binaries are available for Linux x86_64, Linux aarch64, and macOS arm64.

@@ -13,12 +13,12 @@ Most commands print JSON responses for deterministic automation in scripts.
 herdr                         # launch or attach to the default session
 herdr --remote workbox        # attach through SSH, using local keybindings
 herdr --default-config        # print default config
-herdr update                  # download and install from the configured channel
+herdl update                  # install a checksum-pinned VSH HerDL build
 herdr completion zsh          # generate a zsh completion script
-herdr channel show            # print stable or preview
-herdr channel set preview     # opt into preview builds
-herdr channel set stable      # return a direct install to stable
-herdr --version               # print version
+herdl channel show            # print stable or preview
+herdl channel set preview     # select the VSH preview manifest
+herdl channel set stable      # select the VSH stable manifest
+herdl --version               # print <base>-vsh.<commit>
 ```
 
 Optional launch and update settings:

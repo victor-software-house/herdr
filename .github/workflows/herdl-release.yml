@@ -1,0 +1,241 @@
+name: Publish HerDL
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Optional master commit SHA to publish
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+
+concurrency:
+  group: herdl-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.repository == 'victor-software-house/herdr'
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.plan.outputs.commit }}
+      build_id: ${{ steps.plan.outputs.build_id }}
+      base_version: ${{ steps.plan.outputs.base_version }}
+      identity: ${{ steps.plan.outputs.identity }}
+      tag: ${{ steps.plan.outputs.tag }}
+      built_at: ${{ steps.plan.outputs.built_at }}
+      protocol: ${{ steps.plan.outputs.protocol }}
+      endpoint_generation: ${{ steps.plan.outputs.endpoint_generation }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select downstream commit
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          requested='${{ github.event.inputs.commit || '' }}'
+          if [ -n "$requested" ]; then
+            commit="$(git rev-parse "$requested^{commit}")"
+          else
+            commit="$(git rev-parse origin/master)"
+          fi
+          if ! git merge-base --is-ancestor "$commit" origin/master; then
+            echo "error: requested commit $commit is not reachable from origin/master" >&2
+            exit 1
+          fi
+          git checkout --detach "$commit"
+          build_id="$(git rev-parse --short=12 HEAD)"
+          base_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          identity="$base_version-vsh.$build_id"
+          protocol="$(sed -n 's/^pub const PROTOCOL_VERSION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/wire.rs)"
+          endpoint_generation="$(sed -n 's/^pub const ENDPOINT_PROTOCOL_GENERATION: u32 = \([0-9][0-9]*\);/\1/p' src/protocol/endpoint.rs)"
+          {
+            echo "commit=$commit"
+            echo "build_id=$build_id"
+            echo "base_version=$base_version"
+            echo "identity=$identity"
+            echo "tag=v$identity"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "protocol=$protocol"
+            echo "endpoint_generation=$endpoint_generation"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: preflight
+    if: github.repository == 'victor-software-house/herdr'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            name: herdl-linux-x86_64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            name: herdl-linux-aarch64
+          - target: aarch64-apple-darwin
+            os: macos-26
+            name: herdl-macos-aarch64
+    runs-on: ${{ matrix.os }}
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
+      LIBGHOSTTY_VT_SIMD: 'true'
+      HERDL_BUILD_CHANNEL: vsh
+      HERDL_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
+      HERDL_BUILD_COMMIT: ${{ needs.preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Prefer official Ubuntu mirrors over Azure
+        if: runner.os == 'Linux'
+        run: |
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '/azure.archive.ubuntu.com/d' /etc/apt/apt-mirrors.txt
+          fi
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo find /etc/apt/sources.list.d -type f \( -iname '*microsoft*' -o -iname '*azure-cli*' \) -print -delete
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build musl-tools gcc-aarch64-linux-gnu crossbuild-essential-arm64
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja
+
+      - name: Set Linux aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Remove Zig caches
+        run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package and verify artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp target/${{ matrix.target }}/release/herdl '${{ matrix.name }}'
+          expected='herdl ${{ needs.preflight.outputs.identity }}'
+          if [ '${{ matrix.target }}' = 'aarch64-unknown-linux-musl' ]; then
+            strings '${{ matrix.name }}' | grep -F '${{ needs.preflight.outputs.base_version }}' >/dev/null
+            strings '${{ matrix.name }}' | grep -Fx 'vsh' >/dev/null
+            strings '${{ matrix.name }}' | grep -Fx '${{ needs.preflight.outputs.build_id }}' >/dev/null
+          else
+            actual="$(./'${{ matrix.name }}' --version)"
+            test "$actual" = "$expected"
+          fi
+          file '${{ matrix.name }}' > BUILD_INFO.txt
+          {
+            echo 'identity=${{ needs.preflight.outputs.identity }}'
+            echo 'commit=${{ needs.preflight.outputs.commit }}'
+            echo 'target=${{ matrix.target }}'
+            echo 'channel=vsh'
+          } >> BUILD_INFO.txt
+          if [ "${{ runner.os }}" = 'macOS' ]; then
+            shasum -a 256 '${{ matrix.name }}' > '${{ matrix.name }}.sha256'
+          else
+            sha256sum '${{ matrix.name }}' > '${{ matrix.name }}.sha256'
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}
+            ${{ matrix.name }}.sha256
+            BUILD_INFO.txt
+
+  publish:
+    needs: [preflight, build]
+    if: github.repository == 'victor-software-house/herdr'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: artifacts
+
+      - name: Prepare release notes and prior manifests
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
+          RELEASE_BASE_VERSION: ${{ needs.preflight.outputs.base_version }}
+        run: |
+          set -euo pipefail
+          printf '%s\n\n%s\n%s\n' \
+            '### Changed' \
+            '- Publish the VSH HerDL downstream build with isolated pane-owned terminal tabs.' \
+            "- Built from commit $RELEASE_COMMIT at upstream base v$RELEASE_BASE_VERSION." \
+            > RELEASE_NOTES.md
+          curl -sfL 'https://github.com/victor-software-house/herdr/releases/latest/download/latest.json' -o previous-latest.json || rm -f previous-latest.json
+          curl -sfL 'https://github.com/victor-software-house/herdr/releases/latest/download/preview.json' -o previous-preview.json || rm -f previous-preview.json
+
+      - name: Generate VSH manifests
+        run: |
+          python3 scripts/herdl_release.py manifest \
+            --base-version '${{ needs.preflight.outputs.base_version }}' \
+            --build-id '${{ needs.preflight.outputs.build_id }}' \
+            --commit '${{ needs.preflight.outputs.commit }}' \
+            --built-at '${{ needs.preflight.outputs.built_at }}' \
+            --protocol '${{ needs.preflight.outputs.protocol }}' \
+            --endpoint-generation '${{ needs.preflight.outputs.endpoint_generation }}' \
+            --notes RELEASE_NOTES.md \
+            --artifacts-dir artifacts \
+            --previous-latest previous-latest.json \
+            --previous-preview previous-preview.json \
+            --latest-output latest.json \
+            --preview-output preview.json
+
+      - name: Publish immutable VSH release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          name: HerDL ${{ needs.preflight.outputs.identity }}
+          target_commitish: ${{ needs.preflight.outputs.commit }}
+          body_path: RELEASE_NOTES.md
+          prerelease: false
+          make_latest: true
+          files: |
+            artifacts/herdl-linux-x86_64/herdl-linux-x86_64
+            artifacts/herdl-linux-aarch64/herdl-linux-aarch64
+            artifacts/herdl-macos-aarch64/herdl-macos-aarch64
+            latest.json
+            preview.json

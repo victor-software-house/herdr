@@ -34,6 +34,8 @@ const STABLE_UPDATE_MANIFEST_URL: &str =
     "https://github.com/victor-software-house/herdr/releases/latest/download/latest.json";
 const PREVIEW_UPDATE_MANIFEST_URL: &str =
     "https://github.com/victor-software-house/herdr/releases/latest/download/preview.json";
+const VSH_RELEASE_DOWNLOAD_PREFIX: &str =
+    "https://github.com/victor-software-house/herdr/releases/download/";
 const REMOTE_BINARY_ENV_VAR: &str = "HERDL_REMOTE_BINARY";
 const REMOTE_OUTPUT_READY_MARKER: &str = "herdl-remote-output-ready:1";
 const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
@@ -402,7 +404,7 @@ impl RemoteAssetRef {
 
 #[derive(Deserialize)]
 struct RemoteUpdateManifest {
-    version: String,
+    identity: Option<String>,
     protocol: Option<u32>,
     assets: BTreeMap<String, RemoteAssetRef>,
     #[serde(default)]
@@ -457,7 +459,7 @@ where
 
 impl RemoteUpdateManifest {
     fn release_for_version(&self, version: &str) -> Option<RemoteManifestReleaseRef<'_>> {
-        if self.version.trim_start_matches('v') == version {
+        if self.identity.as_deref() == Some(version) {
             return Some(RemoteManifestReleaseRef {
                 protocol: self.protocol,
                 assets: &self.assets,
@@ -1893,16 +1895,7 @@ fn remote_shell_resolves_managed_install(stdout: &str) -> bool {
         .is_some_and(|path| path.ends_with("/.local/bin/herdl"))
 }
 
-fn automatic_remote_downloads_are_enabled() -> bool {
-    false
-}
-
 fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource> {
-    if !automatic_remote_downloads_are_enabled() {
-        return Err(io::Error::other(
-            "automatic HerDL remote download is unavailable until the VSH release channel is published; set HERDL_REMOTE_BINARY to an explicit HerDL binary",
-        ));
-    }
     let asset_key = platform.asset_key();
     let asset = remote_release_asset(&asset_key)?;
 
@@ -1951,11 +1944,28 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-fn remote_asset_info(asset: &RemoteAssetRef) -> RemoteReleaseAsset {
-    RemoteReleaseAsset {
-        url: asset.url().to_string(),
-        sha256: asset.sha256().map(str::to_string),
+fn remote_asset_info(asset_key: &str, asset: &RemoteAssetRef) -> io::Result<RemoteReleaseAsset> {
+    let url = asset.url();
+    let Some(release_path) = url.strip_prefix(VSH_RELEASE_DOWNLOAD_PREFIX) else {
+        return Err(io::Error::other(format!(
+            "release manifest asset {asset_key} is not hosted by victor-software-house/herdr"
+        )));
+    };
+    let Some((tag, filename)) = release_path.split_once('/') else {
+        return Err(io::Error::other(format!(
+            "release manifest asset {asset_key} URL is invalid"
+        )));
+    };
+    let expected_filename = format!("herdl-{asset_key}");
+    if tag.is_empty() || filename != expected_filename {
+        return Err(io::Error::other(format!(
+            "release manifest asset {asset_key} must end with {expected_filename}"
+        )));
     }
+    Ok(RemoteReleaseAsset {
+        url: url.to_string(),
+        sha256: asset.sha256().map(str::to_string),
+    })
 }
 
 fn preview_assets_for_build<'a>(
@@ -1989,11 +1999,12 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
                 "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdl or install a matching HerDL on the remote host manually"
             )));
         }
-        return assets.get(asset_key).map(remote_asset_info).ok_or_else(|| {
+        let asset = assets.get(asset_key).ok_or_else(|| {
             io::Error::other(format!(
                 "no {asset_key} binary in the preview manifest for build {build_id}"
             ))
-        });
+        })?;
+        return remote_asset_info(asset_key, asset);
     }
 
     let current_version = current_version();
@@ -2018,7 +2029,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
             "no {asset_key} binary in the release manifest for herdl {current_version}"
         ))
     })?;
-    let mut asset = remote_asset_info(asset);
+    let mut asset = remote_asset_info(asset_key, asset)?;
     asset.sha256 = asset
         .sha256
         .or_else(|| release.sha256.get(asset_key).cloned());
@@ -4142,6 +4153,7 @@ mod tests {
         let manifest: RemoteUpdateManifest = serde_json::from_str(
             r#"{
                 "version": "1.2.3",
+                "identity": "1.2.3-vsh.abcdef123456",
                 "assets": {
                     "linux-x86_64": "https://example.com/latest"
                 },
@@ -4159,7 +4171,9 @@ mod tests {
         )
         .unwrap();
 
-        let release = manifest.release_for_version("1.2.3").unwrap();
+        let release = manifest
+            .release_for_version("1.2.3-vsh.abcdef123456")
+            .unwrap();
         assert_eq!(
             release.assets.get("linux-x86_64").map(RemoteAssetRef::url),
             Some("https://example.com/latest")
@@ -4313,18 +4327,23 @@ mod tests {
     }
 
     #[test]
-    fn automatic_remote_download_fails_before_selecting_an_asset() {
-        let platform = RemotePlatform {
-            os: "linux",
-            arch: "aarch64",
+    fn automatic_remote_download_uses_only_vsh_herdl_assets() {
+        let vsh = RemoteAssetRef::Object {
+            url: "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdl-linux-aarch64".into(),
+            sha256: Some("a".repeat(64)),
         };
-        let error = match download_release_asset(&platform) {
-            Ok(_) => panic!("automatic remote download unexpectedly succeeded"),
-            Err(error) => error,
-        };
-        assert!(error
-            .to_string()
-            .contains("automatic HerDL remote download is unavailable"));
+        assert!(remote_asset_info("linux-aarch64", &vsh).is_ok());
+
+        for url in [
+            "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-linux-aarch64",
+            "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdr-linux-aarch64",
+        ] {
+            let foreign = RemoteAssetRef::Object {
+                url: url.into(),
+                sha256: Some("a".repeat(64)),
+            };
+            assert!(remote_asset_info("linux-aarch64", &foreign).is_err());
+        }
     }
 
     #[test]

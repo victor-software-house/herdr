@@ -24,6 +24,10 @@ pub fn is_preview() -> bool {
     channel() == "preview"
 }
 
+pub fn is_vsh() -> bool {
+    channel() == "vsh"
+}
+
 fn non_empty(value: Option<&'static str>) -> Option<&'static str> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -40,5 +44,10 @@ mod tests {
     #[test]
     fn stable_version_defaults_to_cargo_version() {
         assert!(!super::version().is_empty());
+    }
+
+    #[test]
+    fn vsh_identity_is_distinct_from_upstream_channels() {
+        assert_eq!(super::is_vsh(), super::channel() == "vsh");
     }
 }

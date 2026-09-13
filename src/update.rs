@@ -1,7 +1,6 @@
 //! Self-update mechanism.
 //!
-//! HerDL update support, disabled until the VSH release channel is published.
-//! Manual and background checks fail closed before selecting a release asset.
+//! HerDL updates use checksum-pinned assets from the VSH-owned release channel.
 //! Uses `curl` as a subprocess for HTTP — no additional Rust HTTP dependencies.
 //! JSON parsing uses serde_json (already in deps for persistence).
 
@@ -25,6 +24,8 @@ const STABLE_UPDATE_MANIFEST_URL: &str =
     "https://github.com/victor-software-house/herdr/releases/latest/download/latest.json";
 const PREVIEW_UPDATE_MANIFEST_URL: &str =
     "https://github.com/victor-software-house/herdr/releases/latest/download/preview.json";
+const VSH_RELEASE_DOWNLOAD_PREFIX: &str =
+    "https://github.com/victor-software-house/herdr/releases/download/";
 const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdl.json";
 const HERDR_UPDATE_COMMAND: &str = "herdl update";
 const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdl";
@@ -198,6 +199,9 @@ impl AssetRef {
 #[derive(Deserialize)]
 struct UpdateManifest {
     version: String,
+    identity: Option<String>,
+    build_id: Option<String>,
+    commit: Option<String>,
     #[cfg(not(windows))]
     endpoint_generation: Option<u32>,
     /// Thin-client protocol spoken by this release, when advertised by the manifest.
@@ -382,19 +386,79 @@ fn handle_manifest_announcement(version: &str, value: Option<&serde_json::Value>
     }
 }
 
+fn vsh_release_identity(
+    base_version: &str,
+    identity: Option<&str>,
+    build_id: Option<&str>,
+    commit: Option<&str>,
+) -> Result<(String, String, String), String> {
+    let base_version = base_version.trim_start_matches('v');
+    let identity = identity
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("VSH update manifest identity is missing")?;
+    let build_id = build_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("VSH update manifest build_id is missing")?;
+    let commit = commit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("VSH update manifest commit is missing")?;
+    let expected = format!("{base_version}-vsh.{build_id}");
+    if identity != expected {
+        return Err(format!(
+            "VSH update manifest identity {identity} does not match {expected}"
+        ));
+    }
+    if build_id.len() != 12 || !commit.starts_with(build_id) {
+        return Err("VSH update manifest build_id must be the commit's 12-character prefix".into());
+    }
+    Ok((
+        identity.to_string(),
+        build_id.to_string(),
+        commit.to_string(),
+    ))
+}
+
+fn validate_vsh_asset_url(asset_key: &str, url: &str) -> Result<(), String> {
+    let Some(release_path) = url.strip_prefix(VSH_RELEASE_DOWNLOAD_PREFIX) else {
+        return Err(format!(
+            "update manifest asset {asset_key} is not hosted by victor-software-house/herdr"
+        ));
+    };
+    let Some((tag, filename)) = release_path.split_once('/') else {
+        return Err(format!("update manifest asset {asset_key} URL is invalid"));
+    };
+    let expected_filename = if asset_key.starts_with("windows-") {
+        format!("herdl-{asset_key}.zip")
+    } else {
+        format!("herdl-{asset_key}")
+    };
+    if tag.is_empty() || filename != expected_filename {
+        return Err(format!(
+            "update manifest asset {asset_key} must end with {expected_filename}"
+        ));
+    }
+    Ok(())
+}
+
 fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<ReleaseInfo>, String> {
     let current = Version::current();
     let latest = Version::parse(&manifest.version)
         .ok_or_else(|| format!("invalid version in update manifest: {}", manifest.version))?;
+    let (identity, build_id, commit) = vsh_release_identity(
+        &manifest.version,
+        manifest.identity.as_deref(),
+        manifest.build_id.as_deref(),
+        manifest.commit.as_deref(),
+    )?;
 
-    if !stable_channel_should_install(&latest, &current, crate::build_info::is_preview()) {
-        return Ok(None); // up to date
+    if !stable_channel_should_install(&latest, &current, &identity, &crate::build_info::version()) {
+        return Ok(None);
     }
 
-    let metadata = manifest
-        .metadata_for_version(&latest)
-        .ok_or_else(|| format!("missing release metadata for v{latest}"))?;
-    let notes_body = metadata.notes_body();
+    let notes_body = manifest.notes.trim().to_string();
     if notes_body.is_empty() {
         return Err("update manifest notes are empty".into());
     }
@@ -405,6 +469,7 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
         .assets
         .get(&asset_key)
         .ok_or_else(|| format!("no binary for {asset_key} in update manifest"))?;
+    validate_vsh_asset_url(&asset_key, &asset.url)?;
     let download_url = asset.url.clone();
     let sha256 = asset
         .sha256
@@ -415,11 +480,11 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
         })?;
 
     Ok(Some(ReleaseInfo {
-        identity: latest.to_string(),
+        identity,
         version: latest,
         channel: UpdateChannel::Stable,
-        build_id: None,
-        commit: None,
+        build_id: Some(build_id),
+        commit: Some(commit),
         #[cfg(not(windows))]
         target_protocol: manifest.protocol,
         #[cfg(not(windows))]
@@ -435,17 +500,14 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
 fn stable_channel_should_install(
     latest: &Version,
     current: &Version,
-    installed_is_preview: bool,
+    latest_identity: &str,
+    current_identity: &str,
 ) -> bool {
-    installed_is_preview || latest > current
+    latest > current || (latest == current && latest_identity != current_identity)
 }
 
 fn preview_display_version(base_version: &str, build_id: &str) -> String {
-    format!(
-        "{}-preview.{}",
-        base_version.trim_start_matches('v'),
-        build_id
-    )
+    format!("{}-vsh.{}", base_version.trim_start_matches('v'), build_id)
 }
 
 fn release_info_from_preview_manifest(
@@ -461,7 +523,7 @@ fn release_info_from_preview_manifest(
     if build_id.is_empty() {
         return Err("preview manifest build_id is empty".into());
     }
-    if crate::build_info::is_preview()
+    if crate::build_info::is_vsh()
         && crate::build_info::build_id().is_some_and(|current| current == build_id)
     {
         return Ok(None);
@@ -502,6 +564,7 @@ fn release_info_from_preview_manifest(
                 .and_then(|build| build.assets.get(&asset_key))
         })
         .ok_or_else(|| format!("no binary for {asset_key} in preview manifest"))?;
+    validate_vsh_asset_url(&asset_key, &asset.url)?;
     let download_url = asset.url.clone();
 
     Ok(Some(ReleaseInfo {
@@ -2110,17 +2173,8 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 // Public API
 // ---------------------------------------------------------------------------
 
-fn herdl_update_channel_is_published() -> bool {
-    false
-}
-
 /// Manual self-update command (`herdl update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
-    if !herdl_update_channel_is_published() {
-        return Err(
-            "HerDL self-update is unavailable until the VSH release channel is published".into(),
-        );
-    }
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
@@ -2272,16 +2326,6 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
                 install_command: update_install_command().to_string(),
             });
         }
-        return;
-    }
-
-    if !herdl_update_channel_is_published() {
-        tracing::info!(
-            event = "update.check.complete",
-            subsystem = "update",
-            outcome = "disabled_until_vsh_channel",
-            "automatic update check disabled"
-        );
         return;
     }
 
@@ -2816,15 +2860,6 @@ mod tests {
         assert!(running_inside_herdr_env(Some(crate::HERDR_ENV_VALUE)));
         assert!(!running_inside_herdr_env(None));
         assert!(!running_inside_herdr_env(Some("0")));
-    }
-
-    #[test]
-    fn self_update_fails_before_selecting_a_release_channel() {
-        let error = self_update(SelfUpdateOptions::default()).unwrap_err();
-        assert_eq!(
-            error,
-            "HerDL self-update is unavailable until the VSH release channel is published"
-        );
     }
 
     #[test]
@@ -3602,9 +3637,12 @@ mod tests {
         let json = format!(
             r####"{{
                 "version": "99.99.99",
+                "identity": "99.99.99-vsh.abcdef123456",
+                "build_id": "abcdef123456",
+                "commit": "abcdef1234567890",
                 "notes": "### Changed\n- One",
                 "assets": {{
-                    "{asset_key}": "https://example.com/herdl"
+                    "{asset_key}": "https://github.com/victor-software-house/herdr/releases/download/v99.99.99-vsh.abcdef123456/herdl-{asset_key}"
                 }}
             }}"####
         );
@@ -3616,12 +3654,34 @@ mod tests {
     }
 
     #[test]
+    fn update_manifest_rejects_foreign_or_upstream_assets() {
+        for url in [
+            "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-linux-aarch64",
+            "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdr-linux-aarch64",
+        ] {
+            let error = validate_vsh_asset_url("linux-aarch64", url).unwrap_err();
+            assert!(
+                error.contains("victor-software-house/herdr")
+                    || error.contains("herdl-linux-aarch64")
+            );
+        }
+        assert!(validate_vsh_asset_url(
+            "linux-aarch64",
+            "https://github.com/victor-software-house/herdr/releases/download/v0.9.0-vsh.abcdef123456/herdl-linux-aarch64"
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn invalid_manifest_announcement_does_not_block_release_info() {
         let (os, arch) = platform_target();
         let asset_key = format!("{os}-{arch}");
         let json = format!(
             r####"{{
                 "version": "99.99.99",
+                "identity": "99.99.99-vsh.abcdef123456",
+                "build_id": "abcdef123456",
+                "commit": "abcdef1234567890",
                 "protocol": 4,
                 "notes": "### Changed\n- One",
                 "announcement": {{
@@ -3631,7 +3691,7 @@ mod tests {
                 }},
                 "assets": {{
                     "{asset_key}": {{
-                        "url": "https://example.com/herdl",
+                        "url": "https://github.com/victor-software-house/herdr/releases/download/v99.99.99-vsh.abcdef123456/herdl-{asset_key}",
                         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     }}
                 }}
@@ -3645,22 +3705,26 @@ mod tests {
             .expect("release info");
 
         assert_eq!(release.version, Version::parse("99.99.99").unwrap());
-        assert_eq!(release.download_url, "https://example.com/herdl");
+        assert!(release
+            .download_url
+            .starts_with(VSH_RELEASE_DOWNLOAD_PREFIX));
     }
 
     #[test]
-    fn stable_channel_installs_stable_asset_when_current_binary_is_preview() {
+    fn stable_channel_tracks_exact_vsh_identity_at_the_upstream_base_version() {
         let latest_stable = Version::parse("0.6.6").unwrap();
         let installed_base = Version::parse("0.6.6").unwrap();
         assert!(stable_channel_should_install(
             &latest_stable,
             &installed_base,
-            true
+            "0.6.6-vsh.abcdef123456",
+            "0.6.6-vsh.111111111111",
         ));
         assert!(!stable_channel_should_install(
             &latest_stable,
             &installed_base,
-            false
+            "0.6.6-vsh.abcdef123456",
+            "0.6.6-vsh.abcdef123456",
         ));
     }
 
@@ -3679,7 +3743,7 @@ mod tests {
                 "notes": "### Fixed\n- One",
                 "assets": {{
                     "{asset_key}": {{
-                        "url": "https://example.com/herdl-linux-x86_64",
+                        "url": "https://github.com/victor-software-house/herdr/releases/download/v9.9.9-vsh.2026-06-02-abcdef123456/herdl-{asset_key}",
                         "sha256": "deadbeef"
                     }}
                 }},
@@ -3706,7 +3770,7 @@ mod tests {
             .expect("preview update");
 
         assert_eq!(release.channel, UpdateChannel::Preview);
-        assert_eq!(release.identity, "9.9.9-preview.2026-06-02-abcdef123456");
+        assert_eq!(release.identity, "9.9.9-vsh.2026-06-02-abcdef123456");
         assert_eq!(release.target_protocol, Some(77));
         assert_eq!(release.sha256.as_deref(), Some("deadbeef"));
     }

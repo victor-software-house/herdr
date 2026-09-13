@@ -112,10 +112,16 @@ impl ClientShellState {
 impl ClientShellConfig {
     pub(crate) fn from_config(config: &Config) -> Self {
         let theme_runtime = crate::app::client_theme_runtime_from_config(config);
-        let collapsed_sidebar = if config.ui.sidebar.collapsed.invalid_diagnostic().is_none() {
+        let valid_ui = config.invalid_ui_layout_diagnostic().is_none();
+        let collapsed_sidebar = if valid_ui {
             config.ui.sidebar.collapsed.clone()
         } else {
             crate::config::CollapsedSidebarConfig::default()
+        };
+        let tab_strip = if valid_ui {
+            config.ui.tab_strip.clone()
+        } else {
+            crate::config::TabStripConfig::default()
         };
         Self {
             sidebar_width: config.ui.sidebar_width,
@@ -126,6 +132,7 @@ impl ClientShellConfig {
             collapsed_sidebar,
             mobile_width_threshold: config.ui.mobile_width_threshold,
             tab_bar_position: config.ui.tab_bar_position,
+            tab_strip,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
             spaces: config.ui.sidebar.spaces.clone(),
             agents: config.ui.sidebar.agents.clone(),
@@ -317,7 +324,7 @@ impl ClientShellConfig {
         }
 
         if !invalid_section("ui") {
-            if let Some(diagnostic) = config.invalid_sidebar_diagnostic() {
+            if let Some(diagnostic) = config.invalid_ui_layout_diagnostic() {
                 diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
             } else {
                 let ui = &config.ui;
@@ -329,6 +336,7 @@ impl ClientShellConfig {
                 self.collapsed_sidebar = ui.sidebar.collapsed.clone();
                 self.mobile_width_threshold = ui.mobile_width_threshold;
                 self.tab_bar_position = ui.tab_bar_position;
+                self.tab_strip = ui.tab_strip.clone();
                 self.hide_tab_bar_when_single_tab = ui.hide_tab_bar_when_single_tab;
                 self.spaces = ui.sidebar.spaces.clone();
                 self.agents = ui.sidebar.agents.clone();
@@ -463,6 +471,7 @@ mod tests {
         let mut next = Config::default();
         next.ui.sidebar_width = 31;
         next.ui.sidebar.collapsed.width = 6;
+        next.ui.tab_strip.gap = 0;
         next.ui.tab_bar_position = TabBarPositionConfig::Bottom;
         next.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
@@ -474,6 +483,7 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert_eq!(shell.sidebar_width, 31);
         assert_eq!(shell.collapsed_sidebar.width, 6);
+        assert_eq!(shell.tab_strip.gap, 0);
         assert_eq!(shell.tab_bar_position, TabBarPositionConfig::Bottom);
         assert_eq!(
             shell.agent_panel_sort,

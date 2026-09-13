@@ -325,6 +325,25 @@ const DEFAULT_CONFIG: &str = r##"# herdl configuration
 
 # Desktop tab row placement: "top" or "bottom".
 # tab_bar_position = "top"
+#
+# [ui.tab_strip]
+# min_tab_width = 8
+# label_padding_left = 2
+# label_padding_right = 2
+# label_alignment = "center"
+# gap = 1
+# overflow_indicator = "…"
+# drop_indicator = "│"
+# status_gap = 1
+#
+# [ui.tab_strip.scroll]
+# width = 3
+# left = " < "
+# right = " > "
+#
+# [ui.tab_strip.new_tab]
+# width = 3
+# label = " + "
 
 # Ordered status entries at the right edge of the desktop tab bar.
 # Supported types: zoom, hostname, datetime, text, and command.

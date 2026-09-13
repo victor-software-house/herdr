@@ -275,6 +275,7 @@ fn stop_socket_with_timeout(
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     let request = serde_json::json!({
+        "product": crate::product::ID,
         "id": "cli:session:stop",
         "method": "server.stop",
         "params": {}
@@ -561,6 +562,7 @@ mod tests {
             request
         });
         let request = serde_json::json!({
+            "product": crate::product::ID,
             "id": "cli:session:stop",
             "method": "server.stop",
             "params": {}
@@ -575,7 +577,9 @@ mod tests {
             .unwrap(),
             None
         );
-        assert!(handle.join().unwrap().contains("server.stop"));
+        let request = handle.join().unwrap();
+        assert!(request.contains("server.stop"));
+        assert!(request.contains("\"product\":\"herdl\""));
     }
 
     #[cfg(unix)]

@@ -350,6 +350,29 @@ detach = "prefix+x"
 }
 
 #[test]
+fn prefix_new_tab_uses_pane_method_when_advertised_and_v1_fallback_otherwise() {
+    let mut config = Config::default();
+    config.ui.prompt_new_tab_name = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_endpoint_methods(Some(vec!["tab.create_in_pane".into()]));
+
+    assert!(state.handle_input_bytes(&[0x02]).actions.is_empty());
+    let create = state.handle_input_bytes(b"c");
+    assert!(matches!(
+        &create.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::TabCreateInPane(params)
+                    if params.workspace_id.as_deref() == Some("ws_1")
+                        && params.pane_id == "pane_1"
+                        && params.focus
+            )
+    ));
+}
+
+#[test]
 fn prefix_endpoint_action_uses_public_api_with_stable_ids() {
     let mut config = Config::default();
     config.ui.prompt_new_tab_name = false;

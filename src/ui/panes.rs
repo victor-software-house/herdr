@@ -158,21 +158,27 @@ pub(crate) fn apply_pane_chrome(
         .collect()
 }
 
-fn runtime_for_tab_pane<'a>(
-    _app: &'a AppState,
+fn runtime_for_workspace_pane<'a>(
+    app: &'a AppState,
     terminal_runtimes: &'a TerminalRuntimeRegistry,
-    _workspace_index: usize,
-    tab: &'a crate::workspace::Tab,
+    workspace_index: usize,
+    workspace: &'a crate::workspace::Workspace,
     pane_id: crate::layout::PaneId,
+    terminal_overrides: Option<
+        &'a std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    >,
 ) -> Option<(&'a crate::terminal::TerminalId, &'a TerminalRuntime)> {
-    let terminal_id = tab.terminal_id(pane_id)?;
+    #[cfg(not(test))]
+    let _ = (app, workspace_index);
+    let terminal_id = terminal_overrides
+        .and_then(|overrides| overrides.get(&pane_id))
+        .or_else(|| workspace.terminal_id(pane_id))?;
     #[cfg(test)]
-    if let Some(runtime) = _app
+    if let Some(runtime) = app
         .workspaces
-        .get(_workspace_index)?
+        .get(workspace_index)?
         .test_runtimes
         .get(&pane_id)
-        .or_else(|| tab.runtimes.get(&pane_id))
     {
         return Some((terminal_id, runtime));
     }
@@ -204,22 +210,31 @@ fn stable_scrollbar_gutter(
     (inner_rect, scrollbar_rect)
 }
 
-/// Resize every visible runtime in a tab to the geometry it would receive if the tab were selected.
+/// Resize every visible pane's active runtime to the geometry it would receive.
 pub(super) fn resize_tab_panes(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
     workspace_index: usize,
-    tab: &crate::workspace::Tab,
+    workspace: &crate::workspace::Workspace,
     area: Rect,
     cell_size: crate::kitty_graphics::HostCellSize,
+    terminal_overrides: Option<
+        &std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    >,
+    resize_terminal_ids: Option<&std::collections::HashSet<crate::terminal::TerminalId>>,
 ) {
-    let multi_pane = tab.layout.pane_count() > 1;
+    let multi_pane = workspace.layout.pane_count() > 1;
 
-    if tab.zoomed {
-        let focused_id = tab.layout.focused();
-        if let Some((terminal_id, rt)) =
-            runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, focused_id)
-        {
+    if workspace.zoomed {
+        let focused_id = workspace.layout.focused();
+        if let Some((terminal_id, rt)) = runtime_for_workspace_pane(
+            app,
+            terminal_runtimes,
+            workspace_index,
+            workspace,
+            focused_id,
+            terminal_overrides,
+        ) {
             let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
                 Borders::ALL
             } else {
@@ -227,7 +242,7 @@ pub(super) fn resize_tab_panes(
             };
             let pane_inner = pane_inner_rect(area, borders);
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
-            if !app.direct_attach_resize_locks.contains(terminal_id) {
+            if terminal_can_resize(app, terminal_id, resize_terminal_ids) {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,
@@ -240,18 +255,23 @@ pub(super) fn resize_tab_panes(
     }
 
     for info in apply_pane_chrome(
-        tab.layout.panes(area),
+        workspace.layout.panes(area),
         app.pane_borders,
         app.pane_gaps,
         app.pane_outer_borders,
     ) {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
-        if let Some((terminal_id, rt)) =
-            runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, info.id)
-        {
+        if let Some((terminal_id, rt)) = runtime_for_workspace_pane(
+            app,
+            terminal_runtimes,
+            workspace_index,
+            workspace,
+            info.id,
+            terminal_overrides,
+        ) {
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
-            if !app.direct_attach_resize_locks.contains(terminal_id) {
+            if terminal_can_resize(app, terminal_id, resize_terminal_ids) {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,
@@ -268,23 +288,24 @@ pub(super) fn compute_pane_infos_for_tab(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
     ws_idx: usize,
-    tab_idx: usize,
+    _tab_idx: usize,
     area: Rect,
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
+    terminal_overrides: Option<
+        &std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    >,
+    focused_pane_override: Option<crate::layout::PaneId>,
+    resize_terminal_ids: Option<&std::collections::HashSet<crate::terminal::TerminalId>>,
 ) -> Vec<PaneInfo> {
-    let Some(tab) = app
-        .workspaces
-        .get(ws_idx)
-        .and_then(|workspace| workspace.tabs.get(tab_idx))
-    else {
+    let Some(workspace) = app.workspaces.get(ws_idx) else {
         return Vec::new();
     };
 
-    let multi_pane = tab.layout.pane_count() > 1;
+    let multi_pane = workspace.layout.pane_count() > 1;
 
-    if tab.zoomed {
-        let focused_id = tab.layout.focused();
+    if workspace.zoomed {
+        let focused_id = focused_pane_override.unwrap_or_else(|| workspace.layout.focused());
         let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
             Borders::ALL
         } else {
@@ -293,14 +314,17 @@ pub(super) fn compute_pane_infos_for_tab(
         let pane_inner = pane_inner_rect(area, borders);
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
-        if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
+        if let Some((terminal_id, rt)) = runtime_for_workspace_pane(
+            app,
+            terminal_runtimes,
+            ws_idx,
+            workspace,
+            focused_id,
+            terminal_overrides,
+        ) {
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
-            if resize_panes
-                && tab.terminal_id(focused_id).is_some_and(|terminal_id| {
-                    !app.direct_attach_resize_locks.contains(terminal_id)
-                })
-            {
+            if resize_panes && terminal_can_resize(app, terminal_id, resize_terminal_ids) {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,
@@ -320,25 +344,33 @@ pub(super) fn compute_pane_infos_for_tab(
     }
 
     let mut pane_infos = apply_pane_chrome(
-        tab.layout.panes(area),
+        workspace.layout.panes(area),
         app.pane_borders,
         app.pane_gaps,
         app.pane_outer_borders,
     );
+
+    let focused_id = focused_pane_override.unwrap_or_else(|| workspace.layout.focused());
+    for info in &mut pane_infos {
+        info.is_focused = info.id == focused_id;
+    }
 
     for info in &mut pane_infos {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
-        if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
+        if let Some((terminal_id, rt)) = runtime_for_workspace_pane(
+            app,
+            terminal_runtimes,
+            ws_idx,
+            workspace,
+            info.id,
+            terminal_overrides,
+        ) {
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
-            if resize_panes
-                && tab.terminal_id(info.id).is_some_and(|terminal_id| {
-                    !app.direct_attach_resize_locks.contains(terminal_id)
-                })
-            {
+            if resize_panes && terminal_can_resize(app, terminal_id, resize_terminal_ids) {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,
@@ -381,6 +413,9 @@ fn compute_pane_infos(
         area,
         resize_panes,
         cell_size,
+        None,
+        None,
+        None,
     )
 }
 
@@ -391,6 +426,9 @@ pub(super) fn render_panes(
     target: Option<super::tab_surface::TabSurfaceTarget>,
     pane_infos: &[PaneInfo],
     split_borders: &[crate::layout::SplitBorder],
+    terminal_overrides: Option<
+        &std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    >,
 ) {
     let Some(ws_idx) = target.map(|target| target.workspace_index) else {
         return;
@@ -400,7 +438,16 @@ pub(super) fn render_panes(
     };
 
     for info in pane_infos {
-        if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
+        if let Some(rt) = runtime_for_workspace_pane(
+            app,
+            terminal_runtimes,
+            ws_idx,
+            ws,
+            info.id,
+            terminal_overrides,
+        )
+        .map(|(_, runtime)| runtime)
+        {
             let show_cursor = info.is_focused
                 && !pane_is_scrolled_back(rt)
                 && app.pane_exposes_host_cursor(ws_idx, info.id);
@@ -634,7 +681,7 @@ fn render_pane_border_titles(
         }
         let Some(title) = ws
             .pane_state(info.id)
-            .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
+            .and_then(|pane| app.terminals.get(pane.active_terminal_id()))
             .and_then(|terminal| terminal.border_label(app.show_agent_labels_on_pane_borders))
             .and_then(|label| pane_border_title(&label, info.rect.width, info.is_focused))
         else {
@@ -828,6 +875,15 @@ fn color_to_rgb(color: Color) -> Option<Rgb> {
     }
 }
 
+fn terminal_can_resize(
+    app: &AppState,
+    terminal_id: &crate::terminal::TerminalId,
+    resize_terminal_ids: Option<&std::collections::HashSet<crate::terminal::TerminalId>>,
+) -> bool {
+    !app.direct_attach_resize_locks.contains(terminal_id)
+        && resize_terminal_ids.is_none_or(|terminal_ids| terminal_ids.contains(terminal_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,7 +938,7 @@ mod tests {
         let mut app = AppState::test_new();
         app.view.terminal_area = Rect::new(0, 0, 12, 3);
         let ws = Workspace::test_new("test");
-        let pane_id = ws.tabs[0].root_pane;
+        let pane_id = ws.root_pane;
         app.view.pane_infos = vec![PaneInfo {
             id: pane_id,
             rect: Rect::new(0, 0, 12, 3),
@@ -892,7 +948,7 @@ mod tests {
             is_focused: false,
         }];
 
-        let terminal_id = ws.tabs[0].panes[&pane_id].attached_terminal_id.clone();
+        let terminal_id = ws.panes[&pane_id].active_terminal_id().clone();
         let mut terminal_state = TerminalState::new(terminal_id.clone(), "/tmp".into());
         terminal_state.set_manual_label("1 模块组织（已定）".into());
         app.terminals.insert(terminal_id, terminal_state);
@@ -912,12 +968,12 @@ mod tests {
     #[test]
     fn default_horizontal_split_uses_one_shared_divider_column() {
         let mut workspace = Workspace::test_new("test");
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(root);
+        workspace.layout.focus_pane(root);
 
         let infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            workspace.layout.panes(Rect::new(0, 0, 100, 20)),
             PaneBordersConfig::Auto,
             false,
             true,
@@ -933,12 +989,12 @@ mod tests {
     #[test]
     fn default_vertical_split_uses_one_shared_divider_row() {
         let mut workspace = Workspace::test_new("test");
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let bottom = workspace.test_split(ratatui::layout::Direction::Vertical);
-        workspace.tabs[0].layout.focus_pane(root);
+        workspace.layout.focus_pane(root);
 
         let infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            workspace.layout.panes(Rect::new(0, 0, 100, 20)),
             PaneBordersConfig::Auto,
             false,
             true,
@@ -954,12 +1010,12 @@ mod tests {
     #[test]
     fn disabled_outer_borders_keep_only_shared_pane_dividers() {
         let mut workspace = Workspace::test_new("test");
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(root);
+        workspace.layout.focus_pane(root);
 
         let infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            workspace.layout.panes(Rect::new(0, 0, 100, 20)),
             PaneBordersConfig::Auto,
             false,
             false,
@@ -974,12 +1030,12 @@ mod tests {
     #[test]
     fn pane_gaps_keep_independent_bordered_panes() {
         let mut workspace = Workspace::test_new("test");
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(root);
+        workspace.layout.focus_pane(root);
 
         let infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            workspace.layout.panes(Rect::new(0, 0, 100, 20)),
             PaneBordersConfig::Auto,
             true,
             true,
@@ -995,12 +1051,12 @@ mod tests {
     #[test]
     fn borderless_pane_gaps_add_one_empty_cell_between_panes() {
         let mut workspace = Workspace::test_new("test");
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let right = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(root);
+        workspace.layout.focus_pane(root);
 
         let infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            workspace.layout.panes(Rect::new(0, 0, 100, 20)),
             PaneBordersConfig::Off,
             true,
             true,
@@ -1020,7 +1076,7 @@ mod tests {
         workspace.test_split(ratatui::layout::Direction::Horizontal);
 
         let infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            workspace.layout.panes(Rect::new(0, 0, 100, 20)),
             PaneBordersConfig::Off,
             false,
             true,
@@ -1038,7 +1094,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 20);
 
         let default_infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(area),
+            workspace.layout.panes(area),
             PaneBordersConfig::Auto,
             false,
             true,
@@ -1046,7 +1102,7 @@ mod tests {
         assert_eq!(default_infos[0].borders, Borders::NONE);
 
         let framed_infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(area),
+            workspace.layout.panes(area),
             PaneBordersConfig::Always,
             false,
             true,
@@ -1054,7 +1110,7 @@ mod tests {
         assert_eq!(framed_infos[0].borders, Borders::ALL);
 
         let no_outer_infos = apply_pane_chrome(
-            workspace.tabs[0].layout.panes(area),
+            workspace.layout.panes(area),
             PaneBordersConfig::Always,
             false,
             false,
@@ -1171,8 +1227,8 @@ mod tests {
     async fn pane_scrollbar_gutter_is_reserved_before_scrollback_exists() {
         let mut app = AppState::test_new();
         let mut workspace = Workspace::test_new("test");
-        let root_pane = workspace.tabs[0].root_pane;
-        workspace.tabs[0].runtimes.insert(
+        let root_pane = workspace.root_pane;
+        workspace.test_runtimes.insert(
             root_pane,
             TerminalRuntime::test_with_scrollback_bytes(40, 8, 1024, b"ready\n"),
         );
@@ -1199,8 +1255,8 @@ mod tests {
     async fn alternate_screen_reclaims_scrollbar_gutter_and_restores_it_on_exit() {
         let mut app = AppState::test_new();
         let mut workspace = Workspace::test_new("test");
-        let root_pane = workspace.tabs[0].root_pane;
-        workspace.tabs[0].runtimes.insert(
+        let root_pane = workspace.root_pane;
+        workspace.test_runtimes.insert(
             root_pane,
             TerminalRuntime::test_with_scrollback_bytes(
                 40,
@@ -1228,15 +1284,15 @@ mod tests {
             );
             assert_eq!(infos[0].scrollbar_rect.is_some(), has_scrollbar);
             assert_eq!(
-                app.workspaces[0].tabs[0].runtimes[&root_pane].current_size(),
+                app.workspaces[0].test_runtimes[&root_pane].current_size(),
                 (area.height, expected_width)
             );
         };
 
         assert_geometry(39, true);
-        app.workspaces[0].tabs[0].runtimes[&root_pane].test_process_pty_bytes(b"\x1b[?1049h");
+        app.workspaces[0].test_runtimes[&root_pane].test_process_pty_bytes(b"\x1b[?1049h");
         assert_geometry(40, false);
-        app.workspaces[0].tabs[0].runtimes[&root_pane].test_process_pty_bytes(b"\x1b[?1049l");
+        app.workspaces[0].test_runtimes[&root_pane].test_process_pty_bytes(b"\x1b[?1049l");
         assert_geometry(39, true);
     }
 
@@ -1245,8 +1301,8 @@ mod tests {
         let mut app = AppState::test_new();
         let mut workspace = Workspace::test_new("test");
         workspace.zoomed = true;
-        let root_pane = workspace.tabs[0].root_pane;
-        workspace.tabs[0].runtimes.insert(
+        let root_pane = workspace.root_pane;
+        workspace.test_runtimes.insert(
             root_pane,
             TerminalRuntime::test_with_scrollback_bytes(40, 8, 1024, b"ready\n"),
         );
@@ -1275,7 +1331,7 @@ mod tests {
         let mut workspace = Workspace::test_new("test");
         let focused_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
         workspace.zoomed = true;
-        workspace.tabs[0].runtimes.insert(
+        workspace.test_runtimes.insert(
             focused_pane,
             TerminalRuntime::test_with_scrollback_bytes(40, 8, 1024, b"ready\n"),
         );
@@ -1303,8 +1359,8 @@ mod tests {
     async fn tiny_pane_does_not_reserve_scrollbar_gutter() {
         let mut app = AppState::test_new();
         let mut workspace = Workspace::test_new("test");
-        let root_pane = workspace.tabs[0].root_pane;
-        workspace.tabs[0].runtimes.insert(
+        let root_pane = workspace.root_pane;
+        workspace.test_runtimes.insert(
             root_pane,
             TerminalRuntime::test_with_scrollback_bytes(4, 8, 1024, b"ready\n"),
         );
@@ -1331,8 +1387,8 @@ mod tests {
     async fn pane_scrollbar_setting_controls_reserved_column() {
         let mut app = AppState::test_new();
         let mut workspace = Workspace::test_new("test");
-        let root_pane = workspace.tabs[0].root_pane;
-        workspace.tabs[0].runtimes.insert(
+        let root_pane = workspace.root_pane;
+        workspace.test_runtimes.insert(
             root_pane,
             TerminalRuntime::test_with_scrollback_bytes(
                 40,

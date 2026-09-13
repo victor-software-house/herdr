@@ -80,18 +80,35 @@ impl ClientShellState {
             .expect("checked visible notification");
         self.promote_queued_notification(std::time::Instant::now());
         outcome.repaint = true;
-        let Some(pane_id) = notification.event.pane_id else {
+        let target = notification.event.tab_id.map_or_else(
+            || {
+                notification.event.pane_id.map(|pane_id| {
+                    (
+                        crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                            pane_id: pane_id.clone(),
+                        }),
+                        ClientEndpointFocusTarget::Pane(pane_id),
+                    )
+                })
+            },
+            |tab_id| {
+                Some((
+                    crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                        tab_id: tab_id.clone(),
+                    }),
+                    ClientEndpointFocusTarget::Tab(tab_id),
+                ))
+            },
+        );
+        let Some((method, activation_target)) = target else {
             return;
         };
         if notification.endpoint_id == self.active_endpoint_id {
-            self.push_endpoint_method(
-                crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget { pane_id }),
-                outcome,
-            );
+            self.push_endpoint_method(method, outcome);
         } else if self.endpoint_is_online(&notification.endpoint_id) {
             outcome.actions.push(ClientShellAction::ActivateEndpoint {
                 endpoint_id: notification.endpoint_id,
-                target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+                target: Some(activation_target),
             });
         }
     }
@@ -278,16 +295,19 @@ impl ClientShellState {
                 NotificationValidation::Current
             };
         };
+        let tab_id = event.tab_id.as_deref();
         let Some(agent) = self
             .endpoints
             .iter()
             .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
             .and_then(|endpoint| endpoint.snapshot.as_deref())
             .and_then(|snapshot| {
-                snapshot
-                    .agents
-                    .iter()
-                    .find(|agent| agent.pane_id == pane_id)
+                snapshot.agents.iter().find(|agent| {
+                    tab_id.map_or_else(
+                        || agent.pane_id == pane_id,
+                        |tab_id| agent.tab_id == tab_id && agent.pane_id == pane_id,
+                    )
+                })
             })
         else {
             return NotificationValidation::AwaitingSnapshot;

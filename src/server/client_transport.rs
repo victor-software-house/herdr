@@ -395,6 +395,7 @@ pub(crate) enum ServerEvent {
         endpoint_keybindings: bool,
         mouse_capture: bool,
         surface_active: bool,
+        snapshot_codec: String,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -723,6 +724,7 @@ pub(crate) fn handle_client_handshake(
                     return Ok(());
                 }
             };
+            let snapshot_codec = hello.negotiated_snapshot_codec().map(str::to_owned);
             let incompatibility = if hello.generation != ENDPOINT_PROTOCOL_GENERATION {
                 Some((
                     "unsupported_generation",
@@ -760,6 +762,7 @@ pub(crate) fn handle_client_handshake(
                     hello.endpoint_keybindings,
                     hello.mouse_capture,
                     hello.surface_active,
+                    snapshot_codec.expect("required endpoint codecs were validated"),
                 )),
             )
         }
@@ -800,12 +803,13 @@ pub(crate) fn handle_client_handshake(
     } else {
         RenderEncoding::TerminalAnsi
     };
-    let welcome = if shell_options.is_some() {
-        let welcome = EndpointServerWelcome::compatible(
-            crate::server::client_commands::supported_client_shell_method_names()
+    let welcome = if let Some((_, _, _, _, _, snapshot_codec)) = shell_options.as_ref() {
+        let welcome = EndpointServerWelcome::compatible_with_snapshot_codec(
+            crate::server::client_commands::supported_client_shell_method_names(snapshot_codec)
                 .iter()
                 .map(|method| (*method).to_owned())
                 .collect(),
+            snapshot_codec,
         );
         ServerMessage::EndpointControl {
             kind: ENDPOINT_WELCOME_KIND.into(),
@@ -854,6 +858,7 @@ pub(crate) fn handle_client_handshake(
         endpoint_keybindings,
         mouse_capture,
         surface_active,
+        snapshot_codec,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -867,6 +872,7 @@ pub(crate) fn handle_client_handshake(
             endpoint_keybindings,
             mouse_capture,
             surface_active,
+            snapshot_codec,
             writer,
         }
     } else {
@@ -1879,6 +1885,54 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_handshake_prefers_snapshot_v2_when_client_offers_both() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-shell-v2");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handshake_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 44, &server_event_tx, &handshake_quit)
+        });
+        let ClientMessage::EndpointControl { kind, data } = endpoint_hello(80, 24) else {
+            unreachable!();
+        };
+        let mut hello: EndpointClientHello = serde_json::from_str(&data).unwrap();
+        hello.snapshot_codecs = vec![
+            crate::protocol::endpoint::SNAPSHOT_CODEC_V2.into(),
+            crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+        ];
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::EndpointControl {
+                kind,
+                data: serde_json::to_string(&hello).unwrap(),
+            },
+        )
+        .unwrap();
+
+        let welcome: ServerMessage =
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).unwrap();
+        let welcome = endpoint_welcome(welcome);
+        assert_eq!(
+            welcome.snapshot_codec,
+            crate::protocol::endpoint::SNAPSHOT_CODEC_V2
+        );
+        assert!(welcome
+            .methods
+            .iter()
+            .any(|method| method == "tab.create_in_pane"));
+        let event = server_event_rx.blocking_recv().unwrap();
+        assert!(matches!(
+            event,
+            ServerEvent::ClientShellConnected { snapshot_codec, .. }
+                if snapshot_codec == crate::protocol::endpoint::SNAPSHOT_CODEC_V2
+        ));
+        should_quit.store(true, Ordering::Release);
+        drop(client_stream);
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
     fn dedicated_client_shell_handshake_uses_surface_viewport() {
         let (mut client_stream, server_stream, _path) = local_stream_pair("client-shell-handshake");
         let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
@@ -1896,6 +1950,10 @@ mod tests {
         let welcome = endpoint_welcome(welcome);
         assert_eq!(welcome.generation, ENDPOINT_PROTOCOL_GENERATION);
         assert!(welcome.error.is_none());
+        assert!(!welcome
+            .methods
+            .iter()
+            .any(|method| method == "tab.create_in_pane"));
         match server_event_rx
             .blocking_recv()
             .expect("client shell connected event")
@@ -1911,6 +1969,7 @@ mod tests {
                 endpoint_keybindings,
                 mouse_capture,
                 surface_active,
+                snapshot_codec,
                 writer,
             } => {
                 assert_eq!(client_id, 43);
@@ -1921,6 +1980,7 @@ mod tests {
                 assert!(endpoint_keybindings);
                 assert!(mouse_capture);
                 assert!(surface_active);
+                assert_eq!(snapshot_codec, crate::protocol::endpoint::SNAPSHOT_CODEC_V1);
                 drop(writer);
             }
             other => panic!("expected ClientShellConnected, got {other:?}"),

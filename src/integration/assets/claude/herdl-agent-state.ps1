@@ -8,7 +8,8 @@ param([string]$Action = "")
 
 if ($Action -ne "session") { exit 0 }
 if ($env:HERDL_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDL_PANE_ID)) { exit 0 }
+$targetId = if (![string]::IsNullOrWhiteSpace($env:HERDL_TAB_ID)) { $env:HERDL_TAB_ID } else { $env:HERDL_PANE_ID }
+if ([string]::IsNullOrWhiteSpace($targetId)) { exit 0 }
 
 $inputText = [Console]::In.ReadToEnd()
 try {
@@ -31,7 +32,7 @@ try {
     $args = @(
         "pane",
         "report-agent-session",
-        $env:HERDL_PANE_ID,
+        $targetId,
         "--source",
         "herdl:claude",
         "--agent",

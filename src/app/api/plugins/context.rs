@@ -235,20 +235,26 @@ impl App {
         tab_id: &str,
         correlation_id: &str,
     ) -> Option<PluginInvocationContext> {
-        let (ws_idx, tab_idx) = self.parse_tab_id(tab_id)?;
+        let (ws_idx, pane_id, tab_idx) = self.parse_public_tab_id(tab_id)?;
         let ws = self.state.workspaces.get(ws_idx)?;
+        let pane = ws.pane_state(pane_id)?;
+        let tab = pane.tabs.get(tab_idx)?;
         let workspace = self.workspace_info(ws_idx);
-        let tab = ws.tabs.get(tab_idx)?;
-        let pane_id = tab.layout.focused();
-        let focused_pane = self.pane_info(ws_idx, pane_id);
-        Some(self.plugin_context_from_parts(
-            ws_idx,
-            workspace,
-            self.public_tab_id(ws_idx, tab_idx),
-            ws.tab_display_name(tab_idx),
-            focused_pane,
-            correlation_id,
-        ))
+        let owner_pane = self.pane_info(ws_idx, pane_id);
+        Some(
+            self.plugin_context_from_parts(
+                ws_idx,
+                workspace,
+                self.public_tab_id_for_pane(ws_idx, pane_id, tab_idx),
+                Some(
+                    tab.custom_name
+                        .clone()
+                        .unwrap_or_else(|| (tab_idx + 1).to_string()),
+                ),
+                owner_pane,
+                correlation_id,
+            ),
+        )
     }
 
     fn plugin_context_for_tab_info(
@@ -304,12 +310,21 @@ impl App {
             return empty_plugin_context(correlation_id);
         };
         let workspace = self.workspace_info(ws_idx);
-        let tab_idx = ws.active_tab_index();
-        let tab_id = self.public_tab_id(ws_idx, tab_idx);
-        let tab_label = ws.tab_display_name(tab_idx);
-        let focused_pane = ws
-            .focused_pane_id()
-            .and_then(|pane_id| self.pane_info(ws_idx, pane_id));
+        let pane_id = ws.focused_pane_id();
+        let tab_idx = pane_id
+            .and_then(|pane_id| ws.pane_state(pane_id))
+            .map_or(0, |pane| pane.active_tab);
+        let tab_id =
+            pane_id.and_then(|pane_id| self.public_tab_id_for_pane(ws_idx, pane_id, tab_idx));
+        let tab_label = pane_id.and_then(|pane_id| {
+            let tab = ws.pane_state(pane_id)?.tabs.get(tab_idx)?;
+            Some(
+                tab.custom_name
+                    .clone()
+                    .unwrap_or_else(|| (tab_idx + 1).to_string()),
+            )
+        });
+        let focused_pane = pane_id.and_then(|pane_id| self.pane_info(ws_idx, pane_id));
         self.plugin_context_from_parts(
             ws_idx,
             workspace,
@@ -328,11 +343,16 @@ impl App {
     ) -> PluginInvocationContext {
         let ws = &self.state.workspaces[ws_idx];
         let workspace = self.workspace_info(ws_idx);
-        let tab_idx = ws
-            .find_tab_index_for_pane(pane_id)
-            .unwrap_or_else(|| ws.active_tab_index());
-        let tab_id = self.public_tab_id(ws_idx, tab_idx);
-        let tab_label = ws.tab_display_name(tab_idx);
+        let tab_idx = ws.pane_state(pane_id).map_or(0, |pane| pane.active_tab);
+        let tab_id = self.public_tab_id_for_pane(ws_idx, pane_id, tab_idx);
+        let tab_label = ws.pane_state(pane_id).and_then(|pane| {
+            let tab = pane.tabs.get(tab_idx)?;
+            Some(
+                tab.custom_name
+                    .clone()
+                    .unwrap_or_else(|| (tab_idx + 1).to_string()),
+            )
+        });
         let focused_pane = self.pane_info(ws_idx, pane_id);
         self.plugin_context_from_parts(
             ws_idx,

@@ -46,6 +46,7 @@ beforeEach(() => {
   process.env.HERDL_ENV = "1";
   process.env.HERDL_SOCKET_PATH = "test.sock";
   process.env.HERDL_PANE_ID = "test:p1";
+  process.env.HERDL_TAB_ID = "test:p1:t2";
 });
 
 async function loadPlugin() {
@@ -86,6 +87,7 @@ test("serializes lifecycle reports", async () => {
   await Promise.all([working, idle]);
 
   expect(requests.map(requestState)).toEqual(["working", "idle"]);
+  expect(requests.map(requestPaneID)).toEqual(["test:p1:t2", "test:p1:t2"]);
   const sequences = requests.map(requestSeq);
   expect(sequences[0]).toEqual(expect.any(Number));
   expect(sequences[1]).toBe((sequences[0] as number) + 1);
@@ -254,6 +256,10 @@ function requestParam(request: unknown, name: string): unknown {
     return undefined;
   }
   return request.params[name];
+}
+
+function requestPaneID(request: unknown) {
+  return isRecord(request) && isRecord(request.params) ? request.params.pane_id : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

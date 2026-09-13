@@ -11,6 +11,7 @@ const originalEnvironment = {
   HERDL_OMP_IDLE_DEBOUNCE_MS: process.env.HERDL_OMP_IDLE_DEBOUNCE_MS,
   HERDL_PANE_ID: process.env.HERDL_PANE_ID,
   HERDL_SOCKET_PATH: process.env.HERDL_SOCKET_PATH,
+  HERDL_TAB_ID: process.env.HERDL_TAB_ID,
 };
 
 let server: Server | undefined;
@@ -88,6 +89,7 @@ function configureIntegrationEnvironment(recordingSocketPath: string) {
   process.env.HERDL_ENV = "1";
   process.env.HERDL_SOCKET_PATH = recordingSocketPath;
   process.env.HERDL_PANE_ID = "test:p1";
+  process.env.HERDL_TAB_ID = "test:p1:t2";
 }
 
 function captureConnectionEndpoint() {
@@ -226,6 +228,11 @@ for (const integration of integrations) {
     }
 
     expect(reportedState()).toBe("working");
+    expect(
+      requests.every(
+        (request) => isRecord(request) && isRecord(request.params) && request.params.pane_id === "test:p1:t2",
+      ),
+    ).toBe(true);
   });
 }
 

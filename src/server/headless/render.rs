@@ -14,22 +14,9 @@ impl HeadlessServer {
                     .map(|runtime| (runtime, popup.pane_id));
             }
         }
-        let target = self.shell_target_for_client(client_id)?;
-        let tab = self
-            .app
-            .state
-            .workspaces
-            .get(target.workspace_index)?
-            .tabs
-            .get(target.tab_index)?;
-        let pane_id = tab.layout.focused();
-        self.app
-            .state
-            .runtime_for_pane_in_workspace(
-                &self.app.terminal_runtimes,
-                target.workspace_index,
-                pane_id,
-            )
+        let tab_id = self.shell_tab_id_for_client(client_id)?;
+        let (workspace_index, pane_id, _) = self.app.parse_public_tab_id(&tab_id)?;
+        self.shell_runtime_for_client_pane(client_id, workspace_index, pane_id)
             .map(|runtime| (runtime, pane_id))
     }
 
@@ -226,7 +213,7 @@ impl HeadlessServer {
 
     pub(super) fn sync_immediate_pty_sources(&self) {
         let (has_app_target, direct_terminal_targets) = self.pty_render_targets();
-        let mut pane_ids = HashSet::new();
+        let mut terminal_ids = HashSet::new();
         if has_app_target {
             for (&client_id, client) in &self.clients {
                 if !client.is_active_shell_client() || client.writer.is_none() {
@@ -235,44 +222,52 @@ impl HeadlessServer {
                 let Some(target) = self.shell_target_for_client(client_id) else {
                     continue;
                 };
-                let Some(tab) = self
+                let Some(workspace) = self
                     .app
                     .state
                     .workspaces
                     .get(target.workspace_index)
-                    .and_then(|workspace| workspace.tabs.get(target.tab_index))
+                    .filter(|workspace| workspace.tab(target.tab_index).is_some())
                 else {
                     continue;
                 };
-                if tab.zoomed {
-                    pane_ids.insert(tab.layout.focused());
+                if workspace.zoomed {
+                    if let Some(terminal_id) = workspace.terminal_id(workspace.layout.focused()) {
+                        terminal_ids.insert(terminal_id.clone());
+                    }
                 } else {
-                    pane_ids.extend(tab.layout.pane_ids());
+                    terminal_ids.extend(
+                        workspace
+                            .layout
+                            .pane_ids()
+                            .into_iter()
+                            .filter_map(|pane_id| workspace.terminal_id(pane_id).cloned()),
+                    );
                 }
                 if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
                     if let Some(popup) = &self.app.state.popup_pane {
-                        pane_ids.insert(popup.pane_id);
+                        terminal_ids.insert(popup.terminal_id.clone());
                     }
                 }
             }
         }
         if !direct_terminal_targets.is_empty() {
             for workspace in &self.app.state.workspaces {
-                for tab in &workspace.tabs {
-                    pane_ids.extend(tab.panes.iter().filter_map(|(&pane_id, pane)| {
-                        direct_terminal_targets
-                            .contains(pane.attached_terminal_id.as_str())
-                            .then_some(pane_id)
-                    }));
-                }
+                terminal_ids.extend(workspace.terminal_ids().filter_map(|terminal_id| {
+                    direct_terminal_targets
+                        .contains(terminal_id.as_str())
+                        .then_some(terminal_id.clone())
+                }));
             }
             if let Some(popup) = &self.app.state.popup_pane {
                 if direct_terminal_targets.contains(popup.terminal_id.as_str()) {
-                    pane_ids.insert(popup.pane_id);
+                    terminal_ids.insert(popup.terminal_id.clone());
                 }
             }
         }
-        self.app.render_dirty.set_immediate_pty_sources(pane_ids);
+        self.app
+            .render_dirty
+            .set_immediate_pty_sources(terminal_ids);
     }
 
     fn pty_render_targets(&self) -> (bool, HashSet<&str>) {
@@ -298,80 +293,78 @@ impl HeadlessServer {
         (has_app_target, direct_terminal_targets)
     }
 
-    fn pty_source_visible_to_render_targets(
-        &self,
-        pane_id: crate::layout::PaneId,
-        has_app_target: bool,
-        direct_terminal_targets: &HashSet<&str>,
-    ) -> bool {
-        let terminal_id = self.terminal_id_for_pane(pane_id);
-        (has_app_target && (terminal_id.is_none() || self.any_shell_surface_contains_pane(pane_id)))
-            || terminal_id.is_none_or(|source| direct_terminal_targets.contains(source.as_str()))
-    }
-
     pub(super) fn pty_sources_visible_to_any_render_target(
         &self,
-        sources: &HashSet<crate::layout::PaneId>,
+        sources: &HashSet<crate::terminal::TerminalId>,
     ) -> bool {
         let (has_app_target, direct_terminal_targets) = self.pty_render_targets();
         if !has_app_target && direct_terminal_targets.is_empty() {
             return false;
         }
 
-        sources.iter().copied().any(|pane_id| {
-            self.pty_source_visible_to_render_targets(
-                pane_id,
-                has_app_target,
-                &direct_terminal_targets,
-            )
-        })
+        if sources
+            .iter()
+            .any(|terminal_id| direct_terminal_targets.contains(terminal_id.as_str()))
+        {
+            return true;
+        }
+        if !has_app_target {
+            return false;
+        }
+
+        sources
+            .iter()
+            .any(|terminal_id| self.any_shell_surface_contains_terminal(terminal_id))
     }
 
-    fn terminal_id_for_pane(
+    fn any_shell_surface_contains_terminal(
         &self,
-        pane_id: crate::layout::PaneId,
-    ) -> Option<&crate::terminal::TerminalId> {
-        if let Some(popup) = self
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> bool {
+        if self
             .app
             .state
             .popup_pane
             .as_ref()
-            .filter(|popup| popup.pane_id == pane_id)
+            .is_some_and(|popup| &popup.terminal_id == terminal_id)
         {
-            return Some(&popup.terminal_id);
+            return self.clients.iter().any(|(&client_id, client)| {
+                client.is_active_shell_client()
+                    && client.writer.is_some()
+                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id)
+            });
         }
-        self.app
-            .find_pane(pane_id)
-            .map(|(_, pane)| &pane.attached_terminal_id)
-    }
 
-    fn any_shell_surface_contains_pane(&self, pane_id: crate::layout::PaneId) -> bool {
+        let Some(location) = self
+            .app
+            .state
+            .terminal_locations()
+            .find_map(|(candidate, location)| (candidate == terminal_id).then_some(location))
+        else {
+            return false;
+        };
         self.clients.iter().any(|(&client_id, client)| {
             if !client.is_active_shell_client() || client.writer.is_none() {
                 return false;
             }
-            if self
-                .app
-                .state
-                .popup_pane
-                .as_ref()
-                .is_some_and(|popup| popup.pane_id == pane_id)
-            {
-                return self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
-            }
             let Some(target) = self.shell_target_for_client(client_id) else {
                 return false;
             };
-            let Some(tab) = self
+            let Some(workspace) = self
                 .app
                 .state
                 .workspaces
                 .get(target.workspace_index)
-                .and_then(|workspace| workspace.tabs.get(target.tab_index))
+                .filter(|_| target.workspace_index == location.ws_idx)
             else {
                 return false;
             };
-            tab.panes.contains_key(&pane_id) && (!tab.zoomed || tab.layout.focused() == pane_id)
+            (!workspace.zoomed || workspace.layout.focused() == location.pane_id)
+                && self.shell_terminal_id_for_client_pane(
+                    client_id,
+                    location.ws_idx,
+                    location.pane_id,
+                ) == Some(terminal_id.clone())
         })
     }
 
@@ -411,33 +404,52 @@ impl HeadlessServer {
             let shell_target = self.shell_target_for_client(client_id);
             let shell_tab_id = self.shell_tab_id_for_client(client_id);
             let shell_shows_popup = shell_tab_id.as_deref() == self.popup_owner_tab_id.as_deref();
+            let shell_location = self
+                .clients
+                .get(&client_id)
+                .and_then(|client| client.shell_location.clone());
             let mut shell_projection_revision = 0;
             if matches!(mode, ClientConnectionMode::ClientShell) {
-                let location = self
-                    .clients
-                    .get(&client_id)
-                    .and_then(|client| client.shell_location.clone());
                 let Some(client) = self.clients.get_mut(&client_id) else {
                     continue;
                 };
-                let mut candidate = client_shell_snapshot(
+                let mut candidate_v2 = crate::server::client_shell::snapshot_v2(
                     &self.app,
                     &self.client_shell_boot_id,
                     client.shell_projection_revision,
                     None,
-                    location.as_ref(),
+                    shell_location.as_ref(),
                 );
-                candidate.config_diagnostic = if client.shell_uses_endpoint_keybindings {
+                candidate_v2.config_diagnostic = if client.shell_uses_endpoint_keybindings {
                     self.server_config_diagnostic.clone()
                 } else {
                     self.server_config_diagnostic_without_keybindings.clone()
                 };
-                candidate.revision = client.shell_projection_revision;
-                if client.shell_snapshot.as_ref() != Some(&candidate) {
+                candidate_v2.revision = client.shell_projection_revision;
+                let snapshot_changed = if client.shell_snapshot_codec
+                    == crate::protocol::endpoint::SNAPSHOT_CODEC_V2
+                {
+                    client.shell_snapshot_v2.as_ref() != Some(&candidate_v2)
+                } else {
+                    let candidate_v1 =
+                        crate::server::client_shell::snapshot_v1_from_v2(candidate_v2.clone());
+                    client.shell_snapshot.as_ref() != Some(&candidate_v1)
+                };
+                if snapshot_changed {
                     client.shell_projection_revision =
                         client.shell_projection_revision.saturating_add(1);
-                    candidate.revision = client.shell_projection_revision;
-                    let message = match crate::protocol::endpoint::snapshot_message(&candidate) {
+                    candidate_v2.revision = client.shell_projection_revision;
+                    let message = if client.shell_snapshot_codec
+                        == crate::protocol::endpoint::SNAPSHOT_CODEC_V2
+                    {
+                        crate::protocol::endpoint::snapshot_message_v2(&candidate_v2)
+                    } else {
+                        let candidate_v1 =
+                            crate::server::client_shell::snapshot_v1_from_v2(candidate_v2.clone());
+                        client.shell_snapshot = Some(candidate_v1.clone());
+                        crate::protocol::endpoint::snapshot_message_v1(&candidate_v1)
+                    };
+                    let message = match message {
                         Ok(message) => message,
                         Err(err) => {
                             warn!(client_id, err = %err, "failed to encode endpoint snapshot");
@@ -461,7 +473,9 @@ impl HeadlessServer {
                         broken_clients.push(client_id);
                         continue;
                     }
-                    client.shell_snapshot = Some(candidate);
+                    if client.shell_snapshot_codec == crate::protocol::endpoint::SNAPSHOT_CODEC_V2 {
+                        client.shell_snapshot_v2 = Some(candidate_v2);
+                    }
                 }
                 shell_projection_revision = client.shell_projection_revision;
                 if !client.shell_surface_active {
@@ -499,6 +513,7 @@ impl HeadlessServer {
                         render_cell_size,
                         &shell_graphics_delivery,
                         client_id,
+                        shell_location.as_ref(),
                     );
                     crate::render_prof::duration_since(
                         "full_render.render_tab_surface_virtual",

@@ -396,6 +396,7 @@ impl ClientShellState {
             replace_on_type: true,
             target: ClientRenameTarget::NewTab {
                 workspace_id,
+                pane_id: snapshot.focused_pane_id.clone(),
                 default_name,
             },
         }));
@@ -1019,17 +1020,43 @@ impl ClientShellState {
             }),
             ClientRenameTarget::NewTab {
                 workspace_id,
+                pane_id,
                 default_name,
-            } => Some(crate::api::schema::Method::TabCreate(
-                crate::api::schema::TabCreateParams {
-                    workspace_id: Some(workspace_id),
-                    cwd: None,
-                    focus: true,
-                    label: (!trimmed.is_empty() && trimmed != default_name)
-                        .then(|| trimmed.to_owned()),
-                    env: Default::default(),
-                },
-            )),
+            } => {
+                let label =
+                    (!trimmed.is_empty() && trimmed != default_name).then(|| trimmed.to_owned());
+                Some(if let Some(pane_id) = pane_id {
+                    let targeted = crate::api::schema::Method::TabCreateInPane(
+                        crate::api::schema::TabCreateInPaneParams {
+                            workspace_id: Some(workspace_id.clone()),
+                            pane_id,
+                            cwd: None,
+                            focus: true,
+                            label: label.clone(),
+                            env: Default::default(),
+                        },
+                    );
+                    if self.endpoint_advertises_method(&targeted) {
+                        targeted
+                    } else {
+                        crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
+                            workspace_id: Some(workspace_id),
+                            cwd: None,
+                            focus: true,
+                            label,
+                            env: Default::default(),
+                        })
+                    }
+                } else {
+                    crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
+                        workspace_id: Some(workspace_id),
+                        cwd: None,
+                        focus: true,
+                        label,
+                        env: Default::default(),
+                    })
+                })
+            }
             ClientRenameTarget::Tab {
                 tab_id,
                 auto_name,

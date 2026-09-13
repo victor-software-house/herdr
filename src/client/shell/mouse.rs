@@ -2096,16 +2096,16 @@ impl ClientShellState {
                 if self.handle_endpoint_agent_click(point, outcome) {
                     return;
                 }
-                let agent_pane_id = self
+                let agent_tab_id = self
                     .hits
                     .agents
                     .iter()
                     .find(|(rect, _)| super::contains(*rect, point))
-                    .map(|(_, pane_id)| pane_id.clone());
-                if let Some(pane_id) = agent_pane_id {
+                    .map(|(_, tab_id)| tab_id.clone());
+                if let Some(tab_id) = agent_tab_id {
                     self.push_endpoint_method(
-                        crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
-                            pane_id,
+                        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                            tab_id,
                         }),
                         outcome,
                     );

@@ -148,20 +148,16 @@ fn retained_scrollbar_patch(
     Some(rows)
 }
 
-fn retained_cursor(
+fn retained_cursor_for_runtime(
     app: &app::App,
-    panes: &[protocol::PaneSurfacePane],
+    pane: &protocol::PaneSurfacePane,
+    workspace_index: usize,
+    pane_id: crate::layout::PaneId,
+    runtime: &crate::terminal::TerminalRuntime,
 ) -> Option<protocol::CursorState> {
-    let pane = panes.iter().find(|pane| pane.focused)?;
-    let (workspace_index, pane_id) = app.parse_pane_id(&pane.pane_id)?;
     if !app.state.pane_exposes_host_cursor(workspace_index, pane_id) {
         return None;
     }
-    let runtime = app.state.runtime_for_pane_in_workspace(
-        &app.terminal_runtimes,
-        workspace_index,
-        pane_id,
-    )?;
     if runtime.synchronized_output_active() {
         return None;
     }
@@ -187,6 +183,7 @@ struct RetainedRecipient<'a> {
 }
 
 struct CollectedPanePatch {
+    terminal_id: crate::terminal::TerminalId,
     pane_id: String,
     patch: crate::pane::TerminalDirtyPatch,
     content_revision: u64,
@@ -211,7 +208,7 @@ impl HeadlessServer {
     /// Any presentation or geometry uncertainty falls back to the complete renderer.
     pub(super) fn render_retained_pane_surface_and_stream(
         &mut self,
-        pty_sources: &HashSet<crate::layout::PaneId>,
+        pty_sources: &HashSet<crate::terminal::TerminalId>,
     ) -> bool {
         crate::render_prof::event("retained_surface.attempt");
         let started = crate::render_prof::timer();
@@ -287,16 +284,38 @@ impl HeadlessServer {
             success!("all_recipients_deferred");
         }
 
+        let terminal_locations = self
+            .app
+            .state
+            .terminal_locations()
+            .filter(|(terminal_id, _)| pty_sources.contains(*terminal_id))
+            .map(|(terminal_id, location)| (terminal_id.clone(), location))
+            .collect::<HashMap<_, _>>();
         let mut collected = Vec::with_capacity(pty_sources.len());
         for source in pty_sources {
+            let Some(location) = terminal_locations.get(source).copied() else {
+                continue;
+            };
+            let source_pane_id = location.pane_id;
             let mut public_pane_id = None;
             let mut width = 0u16;
             let mut height = 0u16;
             for recipient in &recipients {
+                if self
+                    .shell_terminal_id_for_client_pane(
+                        recipient.client_id,
+                        location.ws_idx,
+                        source_pane_id,
+                    )
+                    .as_ref()
+                    != Some(source)
+                {
+                    continue;
+                }
                 let Some(pane) = recipient.surface.panes.iter().find(|pane| {
                     self.app
                         .parse_pane_id(&pane.pane_id)
-                        .is_some_and(|(_, pane_id)| pane_id == *source)
+                        .is_some_and(|(_, pane_id)| pane_id == source_pane_id)
                 }) else {
                     continue;
                 };
@@ -310,11 +329,24 @@ impl HeadlessServer {
             let Some((workspace_index, pane_id)) = self.app.parse_pane_id(&public_pane_id) else {
                 fallback!("pane_missing");
             };
-            let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
-                &self.app.terminal_runtimes,
-                workspace_index,
-                pane_id,
-            ) else {
+            if workspace_index != location.ws_idx || pane_id != source_pane_id {
+                fallback!("terminal_location_changed");
+            }
+            let runtime = self.app.terminal_runtimes.get(source).or({
+                #[cfg(test)]
+                {
+                    self.app
+                        .state
+                        .workspaces
+                        .get(location.ws_idx)
+                        .and_then(|workspace| workspace.test_runtimes.get(&source_pane_id))
+                }
+                #[cfg(not(test))]
+                {
+                    None
+                }
+            });
+            let Some(runtime) = runtime else {
                 fallback!("runtime_missing");
             };
             let Some(snapshot) = runtime.collect_dirty_patch_snapshot(width, height) else {
@@ -331,6 +363,7 @@ impl HeadlessServer {
                 }
             };
             collected.push(CollectedPanePatch {
+                terminal_id: source.clone(),
                 pane_id: public_pane_id,
                 patch,
                 content_revision: snapshot.content_revision,
@@ -355,6 +388,18 @@ impl HeadlessServer {
             let mut refresh_graphics = !surface.graphics.placements.is_empty()
                 || !surface.graphics.retained_assets.is_empty();
             for collected_pane in &collected {
+                let Some((workspace_index, runtime_pane_id)) =
+                    self.app.parse_pane_id(&collected_pane.pane_id)
+                else {
+                    fallback!("pane_missing");
+                };
+                if self
+                    .shell_terminal_id_for_client_pane(client_id, workspace_index, runtime_pane_id)
+                    .as_ref()
+                    != Some(&collected_pane.terminal_id)
+                {
+                    continue;
+                }
                 let Some(pane) = panes
                     .iter_mut()
                     .find(|pane| pane.pane_id == collected_pane.pane_id)
@@ -407,7 +452,12 @@ impl HeadlessServer {
                 changed_panes.push(pane.clone());
             }
 
-            let cursor = retained_cursor(&self.app, &panes);
+            let cursor = panes.iter().find(|pane| pane.focused).and_then(|pane| {
+                let (workspace_index, pane_id) = self.app.parse_pane_id(&pane.pane_id)?;
+                let runtime =
+                    self.shell_runtime_for_client_pane(client_id, workspace_index, pane_id)?;
+                retained_cursor_for_runtime(&self.app, pane, workspace_index, pane_id, runtime)
+            });
             let cursor_changed = cursor != surface.frame.cursor;
             let patch = protocol::PaneSurfacePatch {
                 boot_id: self.client_shell_boot_id.clone(),
@@ -424,6 +474,11 @@ impl HeadlessServer {
                     fallback!("graphics_target");
                 };
                 let client = &self.clients[&client_id];
+                let (terminal_overrides, _) = crate::server::client_shell::client_pane_terminals(
+                    &self.app,
+                    target.workspace_index,
+                    client.shell_location.as_ref(),
+                );
                 let mut next_surface = surface.clone();
                 crate::server::render_stream::apply_pane_surface_patch(&mut next_surface, &patch);
                 let Some((graphics, delivery)) =
@@ -434,6 +489,7 @@ impl HeadlessServer {
                         client.cell_size,
                         &client.shell_graphics_delivery,
                         client_id,
+                        Some(&terminal_overrides),
                     )
                 else {
                     fallback!("graphics_geometry");

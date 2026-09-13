@@ -126,16 +126,14 @@ pub fn load() -> Option<SessionSnapshot> {
         Ok(snapshot) => Some(snapshot),
         Err(err) => {
             if let Some(version) = snapshot_file_version(&content) {
-                if version > SNAPSHOT_VERSION {
-                    warn!(
-                        file_version = version,
-                        supported = SNAPSHOT_VERSION,
-                        "session file is from a newer herdr version, ignoring"
-                    );
-                    return None;
-                }
+                warn!(
+                    file_version = version,
+                    supported = SNAPSHOT_VERSION,
+                    "session file has an incompatible snapshot version, ignoring"
+                );
+            } else {
+                warn!(err = %err, "failed to parse session file, ignoring");
             }
-            warn!(err = %err, "failed to parse session file, ignoring");
             None
         }
     }
@@ -157,16 +155,14 @@ pub fn load_history() -> Option<SessionHistorySnapshot> {
         Ok(snapshot) => Some(snapshot),
         Err(err) => {
             if let Some(version) = snapshot_file_version(&content) {
-                if version > SNAPSHOT_VERSION {
-                    warn!(
-                        file_version = version,
-                        supported = SNAPSHOT_VERSION,
-                        "session history file is from a newer herdr version, ignoring"
-                    );
-                    return None;
-                }
+                warn!(
+                    file_version = version,
+                    supported = SNAPSHOT_VERSION,
+                    "session history file has an incompatible snapshot version, ignoring"
+                );
+            } else {
+                warn!(err = %err, "failed to parse session history file, ignoring");
             }
-            warn!(err = %err, "failed to parse session history file, ignoring");
             None
         }
     }
@@ -176,7 +172,7 @@ pub fn load_history() -> Option<SessionHistorySnapshot> {
 mod tests {
     use super::*;
     use crate::persist::snapshot::{
-        PaneHistorySnapshot, TabHistorySnapshot, WorkspaceHistorySnapshot,
+        PaneHistorySnapshot, TerminalHistorySnapshot, WorkspaceHistorySnapshot,
     };
 
     fn temp_session_path(name: &str) -> PathBuf {
@@ -204,6 +200,7 @@ mod tests {
             workspaces: vec![],
             active: None,
             selected: 0,
+            public_pane_aliases: std::collections::HashMap::new(),
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
@@ -213,17 +210,23 @@ mod tests {
     fn history_snapshot(secret: &str) -> SessionHistorySnapshot {
         SessionHistorySnapshot {
             version: SNAPSHOT_VERSION,
-            workspaces: vec![WorkspaceHistorySnapshot {
-                tabs: vec![TabHistorySnapshot {
+            workspaces: std::collections::HashMap::from([(
+                "w1".into(),
+                WorkspaceHistorySnapshot {
                     panes: std::collections::HashMap::from([(
-                        0,
+                        1,
                         PaneHistorySnapshot {
-                            ansi: secret.to_string(),
-                            lines: 1,
+                            tabs: std::collections::HashMap::from([(
+                                1,
+                                TerminalHistorySnapshot {
+                                    ansi: secret.to_string(),
+                                    lines: 1,
+                                },
+                            )]),
                         },
                     )]),
-                }],
-            }],
+                },
+            )]),
         }
     }
 
@@ -291,7 +294,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let mut snap = empty_snapshot();
-        snap.selected = 7;
+        snap.sidebar_width = Some(27);
         save_to_path(&link, &snap).unwrap();
 
         assert!(std::fs::symlink_metadata(&link)
@@ -299,7 +302,7 @@ mod tests {
             .file_type()
             .is_symlink());
         let parsed = parse_snapshot(&std::fs::read_to_string(&target).unwrap()).unwrap();
-        assert_eq!(parsed.selected, 7);
+        assert_eq!(parsed.sidebar_width, Some(27));
     }
 
     #[cfg(unix)]

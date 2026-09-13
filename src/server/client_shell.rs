@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 use crate::app;
 use crate::protocol::{self, FrameData};
 
+#[cfg(test)]
 pub(super) fn snapshot(
     app: &app::App,
     boot_id: &str,
@@ -10,171 +11,179 @@ pub(super) fn snapshot(
     config_diagnostic: Option<&str>,
     location: Option<&crate::server::clients::ClientShellLocation>,
 ) -> protocol::ClientShellSnapshot {
-    let snapshot = app.session_snapshot();
+    snapshot_v1_from_v2(snapshot_v2(
+        app,
+        boot_id,
+        revision,
+        config_diagnostic,
+        location,
+    ))
+}
+
+pub(super) fn snapshot_v2(
+    app: &app::App,
+    boot_id: &str,
+    revision: u64,
+    config_diagnostic: Option<&str>,
+    location: Option<&crate::server::clients::ClientShellLocation>,
+) -> protocol::ClientShellSnapshotV2 {
+    let api_snapshot = app.session_snapshot();
     let focused_workspace_id = location
         .and_then(|location| location.focused_workspace_id.clone())
-        .or_else(|| snapshot.focused_workspace_id.clone());
-    let focused_tab_id = location
-        .and_then(|location| location.focused_tab_id().map(str::to_owned))
-        .or_else(|| snapshot.focused_tab_id.clone());
-    let focused_pane_id = focused_tab_id
-        .as_deref()
-        .and_then(|tab_id| app.parse_tab_id(tab_id))
-        .and_then(|(workspace_index, tab_index)| {
-            let pane_id = app
-                .state
-                .workspaces
-                .get(workspace_index)?
-                .tabs
-                .get(tab_index)?
-                .layout
-                .focused();
-            app.public_pane_id(workspace_index, pane_id)
-        })
-        .or_else(|| snapshot.focused_pane_id.clone());
-    let workspaces = snapshot
-        .workspaces
-        .into_iter()
-        .zip(&app.state.workspaces)
-        .enumerate()
-        .map(|(workspace_index, (workspace, state))| {
-            let mut tokens = workspace.tokens.into_iter().collect::<Vec<_>>();
-            tokens.sort_by(|left, right| left.0.cmp(&right.0));
-            let workspace_id = workspace.workspace_id;
-            let active_tab_id = location
-                .and_then(|location| location.active_tab_ids.get(&workspace_id))
-                .cloned()
-                .unwrap_or(workspace.active_tab_id);
-            let active_tab_index =
-                app.parse_tab_id(&active_tab_id)
-                    .and_then(|(tab_workspace_index, tab_index)| {
-                        (tab_workspace_index == workspace_index).then_some(tab_index)
-                    });
-            protocol::ClientShellWorkspace {
-                focused: focused_workspace_id.as_deref() == Some(workspace_id.as_str()),
-                workspace_id,
-                active_tab_id,
-                new_workspace_cwd: app
-                    .resolved_new_workspace_cwd_from_tab(workspace_index, active_tab_index)
-                    .display()
-                    .to_string(),
-                number: workspace.number,
-                label: workspace.label,
-                custom_label: state.custom_name.is_some(),
-                branch: state.branch(),
-                git_ahead_behind: state.git_ahead_behind(),
-                tokens,
-                worktree: workspace
-                    .worktree
-                    .map(|worktree| protocol::ClientShellWorktree {
-                        key: worktree.repo_key,
-                        label: worktree.repo_name,
-                        is_linked_worktree: worktree.is_linked_worktree,
-                    }),
-                agent_status: workspace.agent_status,
-            }
-        })
-        .collect();
-    let tabs = snapshot
+        .or_else(|| api_snapshot.focused_workspace_id.clone());
+    let tab_infos = api_snapshot
         .tabs
         .into_iter()
-        .zip(
-            app.state
-                .workspaces
-                .iter()
-                .flat_map(|workspace| workspace.tabs.iter()),
-        )
-        .map(|(tab, state)| {
-            let tab_id = tab.tab_id;
-            protocol::ClientShellTab {
-                focused: focused_tab_id.as_deref() == Some(tab_id.as_str()),
-                tab_id,
-                workspace_id: tab.workspace_id,
-                number: tab.number,
-                label: tab.label,
-                custom_label: !state.is_auto_named(),
-                zoomed: state.zoomed,
-                agent_status: tab.agent_status,
-            }
-        })
-        .collect();
-    let panes = snapshot
-        .panes
-        .into_iter()
-        .map(|pane| {
-            let pane_id = pane.pane_id;
-            let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
-            let right_click_passthrough = app
-                .parse_pane_id(&pane_id)
-                .and_then(|(workspace_index, pane_id)| {
-                    app.state
-                        .workspaces
-                        .get(workspace_index)?
-                        .pane_state(pane_id)
-                })
-                .is_some_and(|pane| pane.right_click_passthrough);
-            protocol::ClientShellPane {
-                pane_id,
-                workspace_id: pane.workspace_id,
-                tab_id: pane.tab_id,
-                label: pane.label,
-                cwd: pane.cwd,
-                foreground_cwd: pane.foreground_cwd,
-                focused,
-                right_click_passthrough,
-            }
-        })
-        .collect();
-    let agents = snapshot
+        .map(|tab| (tab.tab_id.clone(), tab))
+        .collect::<std::collections::HashMap<_, _>>();
+    let agent_infos = api_snapshot
         .agents
         .into_iter()
-        .map(|agent| {
-            let pane_id = agent.pane_id;
-            let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
-            let mut state_labels = agent.state_labels.into_iter().collect::<Vec<_>>();
-            state_labels.sort_by(|left, right| left.0.cmp(&right.0));
-            let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
-            tokens.sort_by(|left, right| left.0.cmp(&right.0));
-            protocol::ClientShellAgent {
-                pane_id,
-                workspace_id: agent.workspace_id,
-                tab_id: agent.tab_id,
-                name: agent.name,
-                display_agent: agent.display_agent,
-                agent: agent.agent,
-                title: agent.title,
-                terminal_title: agent.terminal_title,
-                terminal_title_stripped: agent.terminal_title_stripped,
-                agent_status: agent.agent_status,
-                state_change_seq: agent.state_change_seq,
-                state_labels,
-                tokens,
-                focused,
-            }
-        })
-        .collect();
+        .map(|agent| (agent.tab_id.clone(), agent))
+        .collect::<std::collections::HashMap<_, _>>();
+    let workspace_infos = api_snapshot
+        .workspaces
+        .into_iter()
+        .map(|workspace| (workspace.workspace_id.clone(), workspace))
+        .collect::<std::collections::HashMap<_, _>>();
 
-    let agent_view_label = app
+    let workspaces = app
         .state
-        .agent_view_override
-        .as_ref()
-        .map(|view| view.label.clone().unwrap_or_else(|| "filtered".to_owned()));
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter_map(|(workspace_index, workspace)| {
+            let workspace_id = app.public_workspace_id(workspace_index);
+            let info = workspace_infos.get(&workspace_id)?;
+            let default_focused_pane = workspace.focused_pane_id()?;
+            let focused_pane = location
+                .and_then(|location| location.focused_pane_ids.get(&workspace_id))
+                .and_then(|pane_id| app.parse_pane_id(pane_id))
+                .filter(|(owner, pane_id)| {
+                    *owner == workspace_index && workspace.pane_state(*pane_id).is_some()
+                })
+                .map(|(_, pane_id)| pane_id)
+                .unwrap_or(default_focused_pane);
+            let focused_pane_id = app.public_pane_id(workspace_index, focused_pane)?;
+            let panes = workspace
+                .layout
+                .pane_ids()
+                .into_iter()
+                .filter_map(|pane_id| {
+                    let public_pane_id = app.public_pane_id(workspace_index, pane_id)?;
+                    let pane = workspace.pane_state(pane_id)?;
+                    let active_tab_index = location
+                        .and_then(|location| location.active_tab_ids.get(&public_pane_id))
+                        .and_then(|tab_id| app.parse_public_tab_id(tab_id))
+                        .filter(|(owner, owner_pane, _)| {
+                            *owner == workspace_index && *owner_pane == pane_id
+                        })
+                        .map(|(_, _, tab_index)| tab_index)
+                        .unwrap_or(pane.active_tab);
+                    let active_tab_id =
+                        app.public_tab_id_for_pane(workspace_index, pane_id, active_tab_index)?;
+                    let tabs = pane
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(tab_index, pane_tab)| {
+                            let tab_id =
+                                app.public_tab_id_for_pane(workspace_index, pane_id, tab_index)?;
+                            let tab = tab_infos.get(&tab_id)?;
+                            let terminal = app.state.terminals.get(&pane_tab.terminal_id)?;
+                            let agent = agent_infos.get(&tab_id).map(|agent| {
+                                let mut state_labels =
+                                    agent.state_labels.clone().into_iter().collect::<Vec<_>>();
+                                state_labels.sort_by(|left, right| left.0.cmp(&right.0));
+                                let mut tokens =
+                                    agent.tokens.clone().into_iter().collect::<Vec<_>>();
+                                tokens.sort_by(|left, right| left.0.cmp(&right.0));
+                                protocol::ClientShellAgentV2 {
+                                    pane_id: public_pane_id.clone(),
+                                    workspace_id: workspace_id.clone(),
+                                    tab_id: tab_id.clone(),
+                                    terminal_id: agent.terminal_id.clone(),
+                                    name: agent.name.clone(),
+                                    display_agent: agent.display_agent.clone(),
+                                    agent: agent.agent.clone(),
+                                    title: agent.title.clone(),
+                                    terminal_title: agent.terminal_title.clone(),
+                                    terminal_title_stripped: agent.terminal_title_stripped.clone(),
+                                    agent_status: agent.agent_status,
+                                    state_change_seq: agent.state_change_seq,
+                                    state_labels,
+                                    tokens,
+                                    focused: focused_workspace_id.as_deref()
+                                        == Some(workspace_id.as_str())
+                                        && pane_id == focused_pane
+                                        && tab_index == active_tab_index,
+                                }
+                            });
+                            Some(protocol::ClientShellTabV2 {
+                                tab_id,
+                                terminal_id: pane_tab.terminal_id.to_string(),
+                                number: tab.number,
+                                label: tab.label.clone(),
+                                custom_label: !pane_tab.is_auto_named(),
+                                active: tab_index == active_tab_index,
+                                cwd: Some(terminal.cwd.display().to_string()),
+                                foreground_cwd: app
+                                    .terminal_runtimes
+                                    .get(&pane_tab.terminal_id)
+                                    .and_then(crate::terminal::TerminalRuntime::foreground_cwd)
+                                    .map(|cwd| cwd.display().to_string()),
+                                agent_status: tab.agent_status,
+                                agent,
+                            })
+                        })
+                        .collect();
+                    Some(protocol::ClientShellPaneV2 {
+                        pane_id: public_pane_id,
+                        active_tab_id,
+                        focused: pane_id == focused_pane,
+                        right_click_passthrough: pane.right_click_passthrough,
+                        tabs,
+                    })
+                })
+                .collect();
+            let mut tokens = info.tokens.clone().into_iter().collect::<Vec<_>>();
+            tokens.sort_by(|left, right| left.0.cmp(&right.0));
+            Some(protocol::ClientShellWorkspaceV2 {
+                workspace_id: workspace_id.clone(),
+                new_workspace_cwd: app
+                    .resolved_new_workspace_cwd_from(workspace_index)
+                    .display()
+                    .to_string(),
+                number: info.number,
+                label: info.label.clone(),
+                custom_label: workspace.custom_name.is_some(),
+                branch: workspace.branch(),
+                git_ahead_behind: workspace.git_ahead_behind(),
+                tokens,
+                worktree: info
+                    .worktree
+                    .as_ref()
+                    .map(|worktree| protocol::ClientShellWorktree {
+                        key: worktree.repo_key.clone(),
+                        label: worktree.repo_name.clone(),
+                        is_linked_worktree: worktree.is_linked_worktree,
+                    }),
+                focused: focused_workspace_id.as_deref() == Some(workspace_id.as_str()),
+                focused_pane_id,
+                zoomed: workspace.zoomed,
+                agent_status: info.agent_status,
+                panes,
+            })
+        })
+        .collect::<Vec<_>>();
     let agent_order = crate::ui::agent_panel_entries_from(&app.state, &app.terminal_runtimes)
         .into_iter()
-        .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
+        .filter_map(|entry| app.public_tab_id_for_pane(entry.ws_idx, entry.pane_id, entry.tab_idx))
         .collect();
-
-    let zoomed = focused_tab_id
-        .as_deref()
-        .and_then(|tab_id| app.parse_tab_id(tab_id))
-        .and_then(|(workspace_index, tab_index)| {
-            app.state
-                .workspaces
-                .get(workspace_index)?
-                .tabs
-                .get(tab_index)
-        })
-        .is_some_and(|tab| tab.zoomed);
+    let zoomed = workspaces
+        .iter()
+        .find(|workspace| workspace.focused)
+        .is_some_and(|workspace| workspace.zoomed);
     let tab_bar_right = app
         .state
         .tab_bar_right
@@ -196,7 +205,6 @@ pub(super) fn snapshot(
             | crate::app::state::TabBarStatusSegment::Text(_) => None,
         })
         .collect();
-
     let product_announcement = app.state.product_announcement.as_ref().map(|announcement| {
         protocol::ClientShellProductAnnouncement {
             version: announcement.version.clone(),
@@ -215,8 +223,13 @@ pub(super) fn snapshot(
                 body: notes.body.clone(),
                 preview: notes.preview,
             });
+    let agent_view_label = app
+        .state
+        .agent_view_override
+        .as_ref()
+        .map(|view| view.label.clone().unwrap_or_else(|| "filtered".to_owned()));
 
-    protocol::ClientShellSnapshot {
+    protocol::ClientShellSnapshotV2 {
         boot_id: boot_id.to_owned(),
         revision,
         config_diagnostic: config_diagnostic.map(str::to_owned),
@@ -229,17 +242,133 @@ pub(super) fn snapshot(
         worktree_directory: app.state.worktree_directory.to_string_lossy().into_owned(),
         release_notes,
         focused_workspace_id,
-        focused_tab_id,
-        focused_pane_id,
         tab_bar_right,
         tab_bar_right_separator: app.state.tab_bar_right_separator.clone(),
         agent_view_label,
         agent_order,
         workspaces,
+        commands: app.client_shell_command_manifest(),
+    }
+}
+
+pub(super) fn snapshot_v1_from_v2(
+    snapshot: protocol::ClientShellSnapshotV2,
+) -> protocol::ClientShellSnapshot {
+    let focused_workspace_id = snapshot.focused_workspace_id.clone();
+    let focused_workspace = snapshot
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.focused);
+    let focused_pane_id = focused_workspace.map(|workspace| workspace.focused_pane_id.clone());
+    let focused_tab_id = focused_workspace
+        .and_then(|workspace| workspace.panes.iter().find(|pane| pane.focused))
+        .map(|pane| pane.active_tab_id.clone());
+    let mut workspaces = Vec::new();
+    let mut tabs = Vec::new();
+    let mut panes = Vec::new();
+    let mut agents = Vec::new();
+    for workspace in &snapshot.workspaces {
+        let Some(focused_pane) = workspace
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == workspace.focused_pane_id)
+        else {
+            continue;
+        };
+        workspaces.push(protocol::ClientShellWorkspace {
+            workspace_id: workspace.workspace_id.clone(),
+            active_tab_id: focused_pane.active_tab_id.clone(),
+            new_workspace_cwd: workspace.new_workspace_cwd.clone(),
+            number: workspace.number,
+            label: workspace.label.clone(),
+            custom_label: workspace.custom_label,
+            branch: workspace.branch.clone(),
+            git_ahead_behind: workspace.git_ahead_behind,
+            tokens: workspace.tokens.clone(),
+            worktree: workspace.worktree.clone(),
+            focused: workspace.focused,
+            agent_status: workspace.agent_status,
+        });
+        tabs.extend(
+            focused_pane
+                .tabs
+                .iter()
+                .map(|tab| protocol::ClientShellTab {
+                    tab_id: tab.tab_id.clone(),
+                    workspace_id: workspace.workspace_id.clone(),
+                    number: tab.number,
+                    label: tab.label.clone(),
+                    custom_label: tab.custom_label,
+                    zoomed: workspace.zoomed,
+                    focused: workspace.focused && tab.active,
+                    agent_status: tab.agent_status,
+                }),
+        );
+        for pane in &workspace.panes {
+            let Some(active_tab) = pane.tabs.iter().find(|tab| tab.active) else {
+                continue;
+            };
+            panes.push(protocol::ClientShellPane {
+                pane_id: pane.pane_id.clone(),
+                workspace_id: workspace.workspace_id.clone(),
+                tab_id: active_tab.tab_id.clone(),
+                label: active_tab.custom_label.then(|| active_tab.label.clone()),
+                cwd: active_tab.cwd.clone(),
+                foreground_cwd: active_tab.foreground_cwd.clone(),
+                focused: workspace.focused && pane.focused,
+                right_click_passthrough: pane.right_click_passthrough,
+            });
+            if let Some(agent) = active_tab.agent.as_ref() {
+                agents.push(protocol::ClientShellAgent {
+                    pane_id: agent.pane_id.clone(),
+                    workspace_id: agent.workspace_id.clone(),
+                    tab_id: agent.tab_id.clone(),
+                    name: agent.name.clone(),
+                    display_agent: agent.display_agent.clone(),
+                    agent: agent.agent.clone(),
+                    title: agent.title.clone(),
+                    terminal_title: agent.terminal_title.clone(),
+                    terminal_title_stripped: agent.terminal_title_stripped.clone(),
+                    agent_status: agent.agent_status,
+                    state_change_seq: agent.state_change_seq,
+                    state_labels: agent.state_labels.clone(),
+                    tokens: agent.tokens.clone(),
+                    focused: agent.focused,
+                });
+            }
+        }
+    }
+    let agent_order = snapshot
+        .agent_order
+        .iter()
+        .filter_map(|tab_id| agents.iter().find(|agent| &agent.tab_id == tab_id))
+        .map(|agent| agent.pane_id.clone())
+        .collect();
+
+    protocol::ClientShellSnapshot {
+        boot_id: snapshot.boot_id,
+        revision: snapshot.revision,
+        config_diagnostic: snapshot.config_diagnostic,
+        product_announcement: snapshot.product_announcement,
+        update_available: snapshot.update_available,
+        update_install_command: snapshot.update_install_command,
+        server_keybindings_toml: snapshot.server_keybindings_toml,
+        latest_release_notes_available: snapshot.latest_release_notes_available,
+        integration_updates_available: snapshot.integration_updates_available,
+        worktree_directory: snapshot.worktree_directory,
+        release_notes: snapshot.release_notes,
+        focused_workspace_id,
+        focused_tab_id,
+        focused_pane_id,
+        tab_bar_right: snapshot.tab_bar_right,
+        tab_bar_right_separator: snapshot.tab_bar_right_separator,
+        agent_view_label: snapshot.agent_view_label,
+        agent_order,
+        workspaces,
         tabs,
         panes,
         agents,
-        commands: app.client_shell_command_manifest(),
+        commands: snapshot.commands,
     }
 }
 
@@ -261,22 +390,21 @@ pub(super) fn render_pane_surface(
     cell_size: crate::kitty_graphics::HostCellSize,
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
     client_id: u64,
+    location: Option<&crate::server::clients::ClientShellLocation>,
 ) -> RenderedPaneSurface {
+    let (client_terminals, focused_pane) = target
+        .map(|target| client_pane_terminals(app, target.workspace_index, location))
+        .unwrap_or_default();
     let content_revisions_before = target
         .and_then(|target| {
             let workspace = app.state.workspaces.get(target.workspace_index)?;
-            let tab = workspace.tabs.get(target.tab_index)?;
             Some(
-                tab.layout
+                workspace
+                    .layout
                     .pane_ids()
                     .into_iter()
                     .filter_map(|pane_id| {
-                        app.state
-                            .runtime_for_pane_in_workspace(
-                                &app.terminal_runtimes,
-                                target.workspace_index,
-                                pane_id,
-                            )
+                        selected_runtime(app, &client_terminals, target.workspace_index, pane_id)
                             .map(|runtime| (pane_id, runtime.content_seq()))
                     })
                     .collect::<std::collections::HashMap<_, _>>(),
@@ -291,6 +419,8 @@ pub(super) fn render_pane_surface(
             area,
             resize_panes,
             cell_size,
+            Some(&client_terminals),
+            focused_pane,
         );
     let panes = target
         .map(|target| {
@@ -300,11 +430,8 @@ pub(super) fn render_pane_surface(
                 .iter()
                 .filter_map(|pane| {
                     app.public_pane_id(workspace_index, pane.id).map(|pane_id| {
-                        let runtime = app.state.runtime_for_pane_in_workspace(
-                            &app.terminal_runtimes,
-                            workspace_index,
-                            pane.id,
-                        );
+                        let runtime =
+                            selected_runtime(app, &client_terminals, workspace_index, pane.id);
                         let mouse_reporting =
                             runtime.is_some_and(|runtime| runtime.mouse_reporting_enabled());
                         let sgr_pixel_mouse =
@@ -397,6 +524,7 @@ pub(super) fn render_pane_surface(
         cell_size,
         graphics_delivery,
         client_id,
+        Some(&client_terminals),
     );
     RenderedPaneSurface {
         frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
@@ -406,6 +534,67 @@ pub(super) fn render_pane_surface(
         graphics,
         graphics_delivery: next_graphics_delivery,
     }
+}
+
+pub(super) fn client_pane_terminals(
+    app: &app::App,
+    workspace_index: usize,
+    location: Option<&crate::server::clients::ClientShellLocation>,
+) -> (
+    std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    Option<crate::layout::PaneId>,
+) {
+    let Some(workspace) = app.state.workspaces.get(workspace_index) else {
+        return Default::default();
+    };
+    let focused_pane = location
+        .and_then(crate::server::clients::ClientShellLocation::focused_pane_id)
+        .and_then(|pane_id| app.parse_pane_id(pane_id))
+        .filter(|(owner, _)| *owner == workspace_index)
+        .map(|(_, pane_id)| pane_id)
+        .or_else(|| workspace.focused_pane_id());
+    let terminals = workspace
+        .layout
+        .pane_ids()
+        .into_iter()
+        .filter_map(|pane_id| {
+            let pane = workspace.pane_state(pane_id)?;
+            let public_pane_id = app.public_pane_id(workspace_index, pane_id)?;
+            let tab_index = location
+                .and_then(|location| location.active_tab_ids.get(&public_pane_id))
+                .and_then(|tab_id| app.parse_public_tab_id(tab_id))
+                .filter(|(owner, owner_pane, _)| {
+                    *owner == workspace_index && *owner_pane == pane_id
+                })
+                .map(|(_, _, tab_index)| tab_index)
+                .unwrap_or(pane.active_tab);
+            Some((pane_id, pane.tabs.get(tab_index)?.terminal_id.clone()))
+        })
+        .collect();
+    (terminals, focused_pane)
+}
+
+fn selected_runtime<'a>(
+    app: &'a app::App,
+    terminals: &std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    workspace_index: usize,
+    pane_id: crate::layout::PaneId,
+) -> Option<&'a crate::terminal::TerminalRuntime> {
+    let terminal_id = terminals.get(&pane_id)?;
+    let workspace = app.state.workspaces.get(workspace_index)?;
+    if workspace
+        .pane_state(pane_id)
+        .is_some_and(|pane| pane.active_terminal_id() == terminal_id)
+    {
+        if let Some(runtime) = app.state.runtime_for_pane_in_workspace(
+            &app.terminal_runtimes,
+            workspace_index,
+            pane_id,
+        ) {
+            return Some(runtime);
+        }
+    }
+    app.terminal_runtimes.get(terminal_id)
 }
 
 fn render_popup_surface(
@@ -542,6 +731,133 @@ fn split_hit_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v1_fallback_projects_only_focused_stack_active_panes_and_active_agents() {
+        let mut snapshot_v2: protocol::ClientShellSnapshotV2 =
+            serde_json::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/endpoint-snapshot-v2.json"
+            )))
+            .unwrap();
+        let inactive_agent = snapshot_v2.workspaces[0].panes[0].tabs[1]
+            .agent
+            .clone()
+            .unwrap();
+        let mut focused_agent = inactive_agent.clone();
+        focused_agent.tab_id = "w_alpha:p1:t1".into();
+        focused_agent.terminal_id = "terminal-1".into();
+        focused_agent.focused = true;
+        snapshot_v2.workspaces[0].panes[0].tabs[0].agent = Some(focused_agent);
+        let mut background_agent = inactive_agent;
+        background_agent.pane_id = "w_alpha:p2".into();
+        background_agent.tab_id = "w_alpha:p2:t3".into();
+        background_agent.terminal_id = "terminal-3".into();
+        snapshot_v2.workspaces[0].panes[1].tabs[0].agent = Some(background_agent);
+        snapshot_v2.agent_order = vec![
+            "w_alpha:p1:t2".into(),
+            "w_alpha:p1:t1".into(),
+            "w_alpha:p2:t3".into(),
+        ];
+
+        let snapshot_v1 = snapshot_v1_from_v2(snapshot_v2);
+
+        assert_eq!(
+            snapshot_v1
+                .tabs
+                .iter()
+                .map(|tab| tab.tab_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["w_alpha:p1:t1", "w_alpha:p1:t2"]
+        );
+        assert_eq!(
+            snapshot_v1
+                .panes
+                .iter()
+                .map(|pane| (pane.pane_id.as_str(), pane.tab_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("w_alpha:p1", "w_alpha:p1:t1"),
+                ("w_alpha:p2", "w_alpha:p2:t3")
+            ]
+        );
+        assert_eq!(
+            snapshot_v1
+                .agents
+                .iter()
+                .map(|agent| (agent.pane_id.as_str(), agent.tab_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("w_alpha:p1", "w_alpha:p1:t1"),
+                ("w_alpha:p2", "w_alpha:p2:t3")
+            ]
+        );
+        assert_eq!(snapshot_v1.agent_order, vec!["w_alpha:p1", "w_alpha:p2"]);
+    }
+
+    #[test]
+    fn v2_projects_every_stable_pane_and_pane_owned_tab_while_v1_is_duplicate_free() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let mut workspace = crate::workspace::Workspace::test_new("nested");
+        let first_pane = workspace.root_pane;
+        workspace.test_add_tab_to_pane(first_pane, Some("inactive"));
+        let second_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        workspace.test_add_tab_to_pane(second_pane, Some("second-inactive"));
+        workspace.layout.focus_pane(first_pane);
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+
+        let snapshot_v2 = snapshot_v2(&app, "boot", 1, None, None);
+        assert_eq!(snapshot_v2.workspaces.len(), 1);
+        assert_eq!(snapshot_v2.workspaces[0].panes.len(), 2);
+        assert_eq!(snapshot_v2.workspaces[0].panes[0].tabs.len(), 2);
+        assert_eq!(snapshot_v2.workspaces[0].panes[1].tabs.len(), 2);
+        assert_ne!(
+            snapshot_v2.workspaces[0].panes[0].pane_id,
+            snapshot_v2.workspaces[0].panes[1].pane_id
+        );
+
+        let snapshot_v1 = snapshot_v1_from_v2(snapshot_v2);
+        assert_eq!(snapshot_v1.workspaces.len(), 1);
+        assert_eq!(snapshot_v1.tabs.len(), 2);
+        assert!(snapshot_v1
+            .tabs
+            .iter()
+            .all(|tab| tab.tab_id.starts_with(&format!(
+                "{}:",
+                snapshot_v1.focused_pane_id.as_deref().unwrap()
+            ))));
+        assert_eq!(snapshot_v1.panes.len(), 2);
+        assert!(snapshot_v1.panes.iter().all(|pane| pane.tab_id
+            == snapshot_v1.workspaces[0].active_tab_id
+            || pane.pane_id != snapshot_v1.focused_pane_id.as_deref().unwrap()));
+        let unique_panes = snapshot_v1
+            .panes
+            .iter()
+            .map(|pane| pane.pane_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique_panes.len(), snapshot_v1.panes.len());
+        let unique_agents = snapshot_v1
+            .agents
+            .iter()
+            .map(|agent| agent.pane_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique_agents.len(), snapshot_v1.agents.len());
+        assert!(snapshot_v1.agents.iter().all(|agent| {
+            snapshot_v1
+                .panes
+                .iter()
+                .any(|pane| pane.pane_id == agent.pane_id && pane.tab_id == agent.tab_id)
+        }));
+    }
 
     #[test]
     fn snapshot_projects_cached_release_and_update_facts() {

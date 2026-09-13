@@ -32,27 +32,31 @@ pub(crate) fn toast_message_from_state_change(
         .iter()
         .enumerate()
         .find_map(|(ws_idx, ws)| {
-            ws.tabs.iter().find_map(|tab| {
-                let pane = tab.panes.get(&pane_id)?;
-                let agent_label = state
-                    .terminals
-                    .get(&pane.attached_terminal_id)
-                    .and_then(|terminal| terminal.effective_agent_label())?;
-                let kind = app::actions::notification_toast_for_state_change_with_agent_labels(
-                    suppress_active_tab_notifications,
-                    prev_state,
-                    new_state,
-                    previous_agent_label,
-                    Some(agent_label),
-                )?;
-                let workspace_label = ws.display_name_from(&state.terminals, terminal_runtimes);
-                Some(format!(
-                    "{} {}: {}",
-                    agent_label,
-                    toast_event_text(kind),
-                    app::actions::notification_context(ws, &workspace_label, ws_idx, pane_id)
-                ))
-            })
+            let pane = ws.panes.get(&pane_id)?;
+            let agent_label = state
+                .terminals
+                .get(pane.active_terminal_id())
+                .and_then(|terminal| terminal.effective_agent_label())?;
+            let kind = app::actions::notification_toast_for_state_change_with_agent_labels(
+                suppress_active_tab_notifications,
+                prev_state,
+                new_state,
+                previous_agent_label,
+                Some(agent_label),
+            )?;
+            let workspace_label = ws.display_name_from(&state.terminals, terminal_runtimes);
+            Some(format!(
+                "{} {}: {}",
+                agent_label,
+                toast_event_text(kind),
+                app::actions::notification_context(
+                    ws,
+                    &workspace_label,
+                    ws_idx,
+                    pane_id,
+                    pane.active_terminal_id(),
+                )
+            ))
         })
 }
 
@@ -91,7 +95,7 @@ mod tests {
             .workspaces
             .push(crate::workspace::Workspace::test_new("stale"));
         state.ensure_test_terminals();
-        let root = state.workspaces[0].tabs[0].root_pane;
+        let root = state.workspaces[0].root_pane;
         let terminal_id = state.workspaces[0].terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
             "herdr-forwarded-toast-context-{}-{}",
@@ -115,6 +119,7 @@ mod tests {
         let (events, _) = tokio::sync::mpsc::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
             root,
+            terminal_id.clone(),
             24,
             80,
             live_cwd.clone(),

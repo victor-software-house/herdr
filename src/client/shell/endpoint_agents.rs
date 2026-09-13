@@ -38,7 +38,7 @@ pub(super) fn render_collapsed(
                 }),
         );
         hits.endpoint_agents
-            .push((rect, row.endpoint_id, row.agent.pane_id));
+            .push((rect, row.endpoint_id, row.agent.tab_id));
     }
 }
 
@@ -82,7 +82,7 @@ pub(super) fn render_expanded(
                 );
             }
             hits.endpoint_agents
-                .push((rect, row.endpoint_id.clone(), row.agent.pane_id.clone()));
+                .push((rect, row.endpoint_id.clone(), row.agent.tab_id.clone()));
         },
     );
 }
@@ -105,7 +105,7 @@ fn agent_rows(
             endpoint.snapshot.as_deref().map(|snapshot| {
                 super::agent_sidebar::agent_rows(snapshot, config, Some(&endpoint.label))
                     .into_iter()
-                    .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))
+                    .map(|agent| ((endpoint.endpoint_id.clone(), agent.tab_id.clone()), agent))
                     .collect::<Vec<_>>()
             })
         })
@@ -115,7 +115,7 @@ fn agent_rows(
     super::aggregate_navigation::aggregate_agent_rows(endpoints, config.agent_panel_sort)
         .into_iter()
         .filter_map(|row| {
-            let key = (row.endpoint.endpoint_id.clone(), row.agent.pane_id.clone());
+            let key = (row.endpoint.endpoint_id.clone(), row.agent.tab_id.clone());
             let mut agent = rendered_rows.remove(&key)?;
             agent.focused &= row.endpoint.endpoint_id == active_endpoint_id;
             Some(EndpointAgentRow {

@@ -533,7 +533,7 @@ fn wait_for_http_contains(port: u16, needle: &str, timeout: Duration) -> String 
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn live_server_holds_one_pty_master_fd_per_pane() {
+fn live_server_holds_one_pty_master_fd_per_terminal() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -561,7 +561,24 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
         .as_str()
         .unwrap()
         .to_string();
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     wait_for_server_ptmx_fd_count(server_pid, 1, Duration::from_secs(5));
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:tab:create-inactive",
+            "method": "tab.create",
+            "params": {
+                "workspace_id": workspace_id,
+                "focus": false
+            }
+        }),
+    ));
+    wait_for_server_ptmx_fd_count(server_pid, 2, Duration::from_secs(5));
 
     let second = request(
         &api_socket,
@@ -580,7 +597,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
         .as_str()
         .unwrap()
         .to_string();
-    wait_for_server_ptmx_fd_count(server_pid, 2, Duration::from_secs(5));
+    wait_for_server_ptmx_fd_count(server_pid, 3, Duration::from_secs(5));
 
     assert_ok(request(
         &api_socket,
@@ -594,7 +611,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
             }
         }),
     ));
-    wait_for_server_ptmx_fd_count(server_pid, 3, Duration::from_secs(5));
+    wait_for_server_ptmx_fd_count(server_pid, 4, Duration::from_secs(5));
 
     assert_ok(request(
         &api_socket,
@@ -603,7 +620,7 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
     let replacement_pid =
         wait_for_replacement_server_pid(&runtime_dir, server_pid, Duration::from_secs(10));
     wait_for_api(&api_socket, Duration::from_secs(10));
-    wait_for_server_ptmx_fd_count(replacement_pid, 3, Duration::from_secs(5));
+    wait_for_server_ptmx_fd_count(replacement_pid, 4, Duration::from_secs(5));
 
     let _ = request(
         &api_socket,
@@ -692,9 +709,10 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
         &fs::read(config_home.join("herdl-dev/session.json")).expect("saved session"),
     )
     .expect("valid session json");
+    assert_eq!(session["version"], 4);
     assert_eq!(session["workspaces"].as_array().map(Vec::len), Some(1));
     assert_eq!(
-        session["workspaces"][0]["tabs"][0]["panes"]
+        session["workspaces"][0]["panes"]
             .as_object()
             .map(serde_json::Map::len),
         Some(1)
@@ -1061,6 +1079,207 @@ fn live_handoff_preserves_pane_process_io() {
         serde_json::json!({"product":"herdl","id":"test:stop","method":"server.stop","params":{}}),
     );
     let _ = client_socket;
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn live_handoff_preserves_every_terminal_tab_in_one_pane() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdl.sock");
+    let first_pid_marker = base.join("first-tab.pid");
+    let second_pid_marker = base.join("second-tab.pid");
+    let first_received = base.join("first-tab.received");
+    let second_received = base.join("second-tab.received");
+
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:workspace",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first_tab_id = created["result"]["workspace"]["active_tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first_terminal_id = created["result"]["root_pane"]["terminal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first_command = format!(
+        "sh -c 'echo $$ > {}; while read line; do echo first:$line; echo first:$line >> {}; done'",
+        first_pid_marker.display(),
+        first_received.display()
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:first-run",
+            "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": first_command, "keys": ["Enter"]}
+        }),
+    ));
+    support::wait_for_file(&first_pid_marker, Duration::from_secs(5));
+
+    let second = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:create-tab",
+            "method": "tab.create",
+            "params": {"workspace_id": workspace_id, "focus": true, "label": "worker"}
+        }),
+    );
+    assert_ok(second.clone());
+    let second_tab_id = second["result"]["tab"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let second_terminal_id = second["result"]["root_pane"]["terminal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(second["result"]["root_pane"]["pane_id"], pane_id);
+    let second_command = format!(
+        "sh -c 'echo $$ > {}; while read line; do echo second:$line; echo second:$line >> {}; done'",
+        second_pid_marker.display(),
+        second_received.display()
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:second-run",
+            "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": second_command, "keys": ["Enter"]}
+        }),
+    ));
+    support::wait_for_file(&second_pid_marker, Duration::from_secs(5));
+
+    let first_pid: u32 = fs::read_to_string(&first_pid_marker)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let second_pid: u32 = fs::read_to_string(&second_pid_marker)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"product":"herdl","id":"test:stacked:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    drop(spawned);
+    thread::sleep(Duration::from_millis(300));
+    wait_for_api(&api_socket, Duration::from_secs(10));
+
+    assert_eq!(unsafe { libc::kill(first_pid as libc::pid_t, 0) }, 0);
+    assert_eq!(unsafe { libc::kill(second_pid as libc::pid_t, 0) }, 0);
+
+    let tabs = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:list-tabs",
+            "method": "tab.list",
+            "params": {"workspace_id": workspace_id}
+        }),
+    );
+    let tabs = tabs["result"]["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2);
+    assert_eq!(tabs[0]["tab_id"], first_tab_id);
+    assert_eq!(tabs[1]["tab_id"], second_tab_id);
+    assert_eq!(tabs[1]["label"], "worker");
+    assert_eq!(tabs[1]["focused"], true);
+
+    let panes = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:list-panes",
+            "method": "pane.list",
+            "params": {"workspace_id": workspace_id}
+        }),
+    );
+    let restored_pane = panes["result"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pane| pane["pane_id"] == pane_id)
+        .expect("stable pane should survive handoff");
+    assert_eq!(restored_pane["tab_id"], second_tab_id);
+    assert_eq!(restored_pane["terminal_id"], second_terminal_id);
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:focus-first",
+            "method": "tab.focus",
+            "params": {"tab_id": first_tab_id}
+        }),
+    ));
+    let first_pane = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:first-pane",
+            "method": "pane.get",
+            "params": {"pane_id": pane_id}
+        }),
+    );
+    assert_eq!(
+        first_pane["result"]["pane"]["terminal_id"],
+        first_terminal_id
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:first-input",
+            "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": "after-first", "keys": ["Enter"]}
+        }),
+    ));
+    wait_for_file_contains(&first_received, "first:after-first", Duration::from_secs(5));
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:focus-second",
+            "method": "tab.focus",
+            "params": {"tab_id": second_tab_id}
+        }),
+    ));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stacked:second-input",
+            "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": "after-second", "keys": ["Enter"]}
+        }),
+    ));
+    wait_for_file_contains(
+        &second_received,
+        "second:after-second",
+        Duration::from_secs(5),
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"product":"herdl","id":"test:stacked:stop","method":"server.stop","params":{}}),
+    );
     cleanup_test_base(&base);
 }
 
@@ -1987,4 +2206,141 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
 #[test]
 fn live_handoff_after_restored_failure_rolls_back_old_server() {
     live_handoff_import_failure_rolls_back_old_server_at("after_restored");
+}
+
+#[test]
+fn live_handoff_preserves_cross_workspace_public_pane_alias() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdl.sock");
+    let pid_marker = base.join("moved.pid");
+    let received_marker = base.join("moved.received");
+
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let source = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:alias:source",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let old_pane_id = source["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let command = format!(
+        "sh -c 'echo $$ > {}; while read line; do echo moved:$line; echo moved:$line >> {}; done'",
+        pid_marker.display(),
+        received_marker.display()
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:alias:run",
+            "method": "pane.send_input",
+            "params": {"pane_id": old_pane_id, "text": command, "keys": ["Enter"]}
+        }),
+    ));
+    support::wait_for_file(&pid_marker, Duration::from_secs(5));
+
+    let target = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:alias:target",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": false}
+        }),
+    );
+    let target_workspace_id = target["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target_tab_id = target["result"]["workspace"]["active_tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target_pane_id = target["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let moved = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:alias:move",
+            "method": "pane.move",
+            "params": {
+                "pane_id": old_pane_id,
+                "destination": {
+                    "type": "tab",
+                    "tab_id": target_tab_id,
+                    "target_pane_id": target_pane_id,
+                    "split": "right"
+                },
+                "focus": true
+            }
+        }),
+    );
+    assert_ok(moved.clone());
+    let current_pane_id = moved["result"]["move_result"]["pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(current_pane_id, old_pane_id);
+    assert_eq!(
+        moved["result"]["move_result"]["pane"]["workspace_id"],
+        target_workspace_id
+    );
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:alias:before",
+            "method": "pane.send_input",
+            "params": {"pane_id": old_pane_id, "text": "before", "keys": ["Enter"]}
+        }),
+    ));
+    wait_for_file_contains(&received_marker, "moved:before", Duration::from_secs(5));
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"product":"herdl","id":"test:alias:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    drop(spawned);
+    thread::sleep(Duration::from_millis(300));
+    wait_for_api(&api_socket, Duration::from_secs(10));
+
+    let restored = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:alias:get",
+            "method": "pane.get",
+            "params": {"pane_id": old_pane_id}
+        }),
+    );
+    assert_eq!(restored["result"]["pane"]["pane_id"], current_pane_id);
+    assert_eq!(
+        restored["result"]["pane"]["workspace_id"],
+        target_workspace_id
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:alias:after",
+            "method": "pane.send_input",
+            "params": {"pane_id": old_pane_id, "text": "after", "keys": ["Enter"]}
+        }),
+    ));
+    wait_for_file_contains(&received_marker, "moved:after", Duration::from_secs(5));
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"product":"herdl","id":"test:alias:stop","method":"server.stop","params":{}}),
+    );
+    cleanup_test_base(&base);
 }

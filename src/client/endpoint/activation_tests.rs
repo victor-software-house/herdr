@@ -144,6 +144,7 @@ fn workspace_focus_success(id: &str, workspace_id: &str) -> Vec<u8> {
                 focused: true,
                 pane_count: 1,
                 tab_count: 1,
+                focused_pane_id: "pane".into(),
                 active_tab_id: "tab".into(),
                 agent_status: crate::api::schema::AgentStatus::Unknown,
                 tokens: Default::default(),

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 #[cfg(unix)]
-const HANDOFF_VERSION: u32 = 1;
+const HANDOFF_VERSION: u32 = 2;
 #[cfg(unix)]
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(unix)]
@@ -38,7 +38,7 @@ pub(crate) struct HandoffManifest {
     pub expected_version: Option<String>,
     pub expected_protocol: Option<u32>,
     pub snapshot: crate::persist::SessionSnapshot,
-    pub panes: Vec<crate::handoff_runtime::HandoffRuntimeState>,
+    pub runtimes: Vec<crate::handoff_runtime::HandoffRuntimeState>,
     /// An outer window title set over the API outlives the server that took the
     /// call, so a handoff carries it rather than falling back to the config.
     /// Absent from manifests written before this field existed.
@@ -185,7 +185,9 @@ pub(crate) fn send_fds_and_wait_restored(stream: &mut UnixStream, fds: &[RawFd])
     if fds.len() > MAX_FDS_PER_HANDOFF {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("handoff supports at most {MAX_FDS_PER_HANDOFF} pane file descriptors at once"),
+            format!(
+                "handoff supports at most {MAX_FDS_PER_HANDOFF} terminal file descriptors at once"
+            ),
         ));
     }
     send_fds(stream, fds)?;
@@ -252,6 +254,8 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
             manifest.version
         )));
     }
+    crate::persist::validate_snapshot(&manifest.snapshot).map_err(io::Error::other)?;
+    validate_runtime_identities(&manifest.snapshot, &manifest.runtimes)?;
     validate_source_protocol(manifest.source_protocol)?;
     if manifest
         .expected_protocol
@@ -276,7 +280,7 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
     }
     stream.write_all(b"validated\n")?;
     stream.flush()?;
-    let fds = recv_fds(&stream, manifest.panes.len())?;
+    let fds = recv_fds(&stream, manifest.runtimes.len())?;
     Ok(ReceivedHandoff {
         manifest,
         fds,
@@ -334,7 +338,7 @@ pub(crate) fn report_owned(stream: &mut UnixStream) -> io::Result<()> {
 #[cfg(unix)]
 pub(crate) fn manifest_for(
     snapshot: crate::persist::SessionSnapshot,
-    panes: Vec<crate::handoff_runtime::HandoffRuntimeState>,
+    runtimes: Vec<crate::handoff_runtime::HandoffRuntimeState>,
     expected_protocol: Option<u32>,
     expected_version: Option<String>,
     api_window_title: Option<String>,
@@ -346,7 +350,7 @@ pub(crate) fn manifest_for(
         expected_version,
         expected_protocol,
         snapshot,
-        panes,
+        runtimes,
         api_window_title,
     }
 }
@@ -496,8 +500,38 @@ fn recv_fds(stream: &UnixStream, expected: usize) -> io::Result<Vec<RawFd>> {
 }
 
 #[cfg(unix)]
-pub(crate) fn log_import_result(panes: usize) {
-    info!(panes, "handoff import ready");
+fn validate_runtime_identities(
+    snapshot: &crate::persist::SessionSnapshot,
+    runtimes: &[crate::handoff_runtime::HandoffRuntimeState],
+) -> io::Result<()> {
+    let expected_terminal_ids: std::collections::HashSet<_> = snapshot
+        .workspaces
+        .iter()
+        .flat_map(|workspace| workspace.panes.values())
+        .flat_map(|pane| pane.tabs.iter())
+        .filter(|tab| tab.runtime_attached)
+        .map(|tab| tab.terminal_id.clone())
+        .collect();
+    let mut terminal_ids = std::collections::HashSet::new();
+    for runtime in runtimes {
+        if !terminal_ids.insert(runtime.terminal_id.clone()) {
+            return Err(io::Error::other(format!(
+                "handoff contains duplicate terminal runtime {}",
+                runtime.terminal_id
+            )));
+        }
+    }
+    if terminal_ids != expected_terminal_ids {
+        return Err(io::Error::other(
+            "handoff runtime identities do not match the attached terminals in the snapshot",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn log_import_result(runtimes: usize) {
+    info!(runtimes, "handoff import ready");
 }
 
 #[cfg(all(test, unix))]
@@ -506,13 +540,40 @@ mod tests {
 
     fn empty_snapshot() -> crate::persist::SessionSnapshot {
         crate::persist::SessionSnapshot {
-            version: 0,
+            version: 4,
             workspaces: Vec::new(),
             active: None,
             selected: 0,
+            public_pane_aliases: Default::default(),
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+        }
+    }
+
+    fn fixture_snapshot() -> crate::persist::SessionSnapshot {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/session/current-herdl-v4.json"
+        ))
+        .expect("v4 fixture should deserialize")
+    }
+
+    fn runtime(
+        terminal_id: crate::terminal::TerminalId,
+    ) -> crate::handoff_runtime::HandoffRuntimeState {
+        crate::handoff_runtime::HandoffRuntimeState {
+            terminal_id,
+            pane_id: 0,
+            child_pid: 0,
+            rows: 24,
+            cols: 80,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            keyboard_protocol_flags: 0,
+            keyboard_protocol_ansi: None,
+            input_state: None,
+            terminal_title: None,
+            initial_history_ansi: None,
         }
     }
 
@@ -548,5 +609,25 @@ mod tests {
             serde_json::from_value(value).expect("an older manifest should still load");
 
         assert!(older.api_window_title.is_none());
+    }
+
+    #[test]
+    fn handoff_runtimes_must_exactly_match_attached_snapshot_terminals() {
+        let snapshot = fixture_snapshot();
+        let terminal_ids: Vec<_> = snapshot
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.panes.values())
+            .flat_map(|pane| pane.tabs.iter())
+            .map(|tab| tab.terminal_id.clone())
+            .collect();
+        let runtimes: Vec<_> = terminal_ids.iter().cloned().map(runtime).collect();
+
+        assert!(validate_runtime_identities(&snapshot, &runtimes).is_ok());
+        assert!(validate_runtime_identities(&snapshot, &runtimes[..2]).is_err());
+
+        let mut duplicate = runtimes;
+        duplicate[2].terminal_id = duplicate[0].terminal_id.clone();
+        assert!(validate_runtime_identities(&snapshot, &duplicate).is_err());
     }
 }

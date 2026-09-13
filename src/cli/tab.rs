@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::api::schema::{TabCreateParams, TabListParams, TabRenameParams};
+use crate::api::schema::{TabCreateParams, TabListParams, TabMoveParams, TabRenameParams};
 
 pub(super) fn run_tab_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
@@ -14,6 +14,7 @@ pub(super) fn run_tab_command(args: &[String]) -> std::io::Result<i32> {
         "get" => tab_get(&args[1..]),
         "focus" => tab_focus(&args[1..]),
         "rename" => tab_rename(&args[1..]),
+        "move" => tab_move(&args[1..]),
         "close" => tab_close(&args[1..]),
         "help" | "--help" | "-h" => {
             print_tab_help();
@@ -52,6 +53,7 @@ fn tab_list(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_create(args: &[String]) -> std::io::Result<i32> {
     let mut workspace_id = None;
+    let mut pane_id = None;
     let mut cwd = None;
     let mut focus = false;
     let mut label = None;
@@ -66,6 +68,14 @@ fn tab_create(args: &[String]) -> std::io::Result<i32> {
                     return Ok(2);
                 };
                 workspace_id = Some(super::normalize_workspace_id(value));
+                index += 2;
+            }
+            "--pane" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("missing value for --pane");
+                    return Ok(2);
+                };
+                pane_id = Some(super::normalize_pane_id(value));
                 index += 2;
             }
             "--cwd" => {
@@ -114,13 +124,24 @@ fn tab_create(args: &[String]) -> std::io::Result<i32> {
         }
     }
 
-    super::runtime::tab_create(TabCreateParams {
-        workspace_id,
-        cwd,
-        focus,
-        label,
-        env,
-    })
+    if let Some(pane_id) = pane_id {
+        super::runtime::tab_create_in_pane(crate::api::schema::TabCreateInPaneParams {
+            workspace_id,
+            pane_id,
+            cwd,
+            focus,
+            label,
+            env,
+        })
+    } else {
+        super::runtime::tab_create(TabCreateParams {
+            workspace_id,
+            cwd,
+            focus,
+            label,
+            env,
+        })
+    }
 }
 
 fn tab_get(args: &[String]) -> std::io::Result<i32> {
@@ -174,14 +195,30 @@ fn tab_close(args: &[String]) -> std::io::Result<i32> {
     super::runtime::tab_close(super::normalize_tab_id(raw_tab_id))
 }
 
+fn tab_move(args: &[String]) -> std::io::Result<i32> {
+    if args.len() != 2 {
+        eprintln!("usage: herdl tab move <tab_id> <insert_index>");
+        return Ok(2);
+    }
+    let Ok(insert_index) = args[1].parse::<usize>() else {
+        eprintln!("insert_index must be a non-negative integer");
+        return Ok(2);
+    };
+    super::runtime::tab_move(TabMoveParams {
+        tab_id: super::normalize_tab_id(&args[0]),
+        insert_index,
+    })
+}
+
 fn print_tab_help() {
     eprintln!("herdr tab commands:");
     eprintln!("  herdr tab list [--workspace <workspace_id>]");
     eprintln!(
-        "  herdr tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]"
+        "  herdr tab create [--workspace <workspace_id>] [--pane <pane_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]"
     );
     eprintln!("  herdr tab get <tab_id>");
     eprintln!("  herdr tab focus <tab_id>");
     eprintln!("  herdr tab rename <tab_id> <label>");
+    eprintln!("  herdr tab move <tab_id> <insert_index>");
     eprintln!("  herdr tab close <tab_id>");
 }

@@ -415,7 +415,7 @@ fn workspace_drag_moves_parent_worktree_as_one_block_and_rejects_child() {
 }
 
 #[test]
-fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
+fn pane_cycle_uses_panes_and_inactive_agent_focus_uses_exact_tab_id() {
     let mut initial = snapshot();
     let mut second = initial.panes[0].clone();
     second.pane_id = "pane_2".into();
@@ -441,7 +441,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
         ClientShellAgent {
             pane_id: "pane_2".into(),
             workspace_id: "ws_1".into(),
-            tab_id: "tab_1".into(),
+            tab_id: "tab_2".into(),
             name: Some("second".into()),
             display_agent: None,
             agent: None,
@@ -500,12 +500,12 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
     };
     assert!(matches!(
         &request.method,
-        crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
+        crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2"
     ));
 }
 
 #[test]
-fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
+fn agent_sidebar_honors_priority_symbols_tokens_and_exact_tab_hits() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
     second_pane.pane_id = "pane_2".into();
@@ -531,7 +531,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
         ClientShellAgent {
             pane_id: "pane_2".into(),
             workspace_id: "ws_1".into(),
-            tab_id: "tab_1".into(),
+            tab_id: "tab_2".into(),
             name: Some("pi two".into()),
             display_agent: None,
             agent: Some("pi".into()),
@@ -581,12 +581,8 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     assert!(text.contains("pi two"), "frame: {text}");
     assert!(text.contains("waiting for"), "frame: {text}");
     assert_eq!(
-        state
-            .hits
-            .agents
-            .first()
-            .map(|(_, pane_id)| pane_id.as_str()),
-        Some("pane_2")
+        state.hits.agents.first().map(|(_, tab_id)| tab_id.as_str()),
+        Some("tab_2")
     );
 
     let first = state.hits.agents[0].0;
@@ -601,17 +597,13 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     };
     assert!(matches!(
         &request.method,
-        crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
+        crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2"
     ));
 
     state.compose(106, 10).expect("short agent sidebar frame");
     assert_eq!(
-        state
-            .hits
-            .agents
-            .first()
-            .map(|(_, pane_id)| pane_id.as_str()),
-        Some("pane_2")
+        state.hits.agents.first().map(|(_, tab_id)| tab_id.as_str()),
+        Some("tab_2")
     );
     let body = state.hits.agent_body;
     state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
@@ -624,12 +616,8 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
         .compose(106, 10)
         .expect("scrolled agent sidebar frame");
     assert_eq!(
-        state
-            .hits
-            .agents
-            .first()
-            .map(|(_, pane_id)| pane_id.as_str()),
-        Some("pane_1")
+        state.hits.agents.first().map(|(_, tab_id)| tab_id.as_str()),
+        Some("tab_1")
     );
 
     state.sidebar_collapsed = true;
@@ -638,7 +626,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
         .hits
         .agents
         .iter()
-        .find(|(_, pane_id)| pane_id == "pane_2")
+        .find(|(_, tab_id)| tab_id == "tab_2")
         .expect("blocked compact agent")
         .0;
     let row_start = blocked.y as usize * compact.width as usize + blocked.x as usize;
@@ -676,7 +664,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
         ClientShellAgent {
             pane_id: "pane_2".into(),
             workspace_id: "ws_1".into(),
-            tab_id: "tab_1".into(),
+            tab_id: "tab_2".into(),
             name: Some("second".into()),
             display_agent: None,
             agent: Some("pi".into()),
@@ -692,7 +680,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
         ClientShellAgent {
             pane_id: "pane_3".into(),
             workspace_id: "ws_1".into(),
-            tab_id: "tab_1".into(),
+            tab_id: "tab_3".into(),
             name: Some("third".into()),
             display_agent: None,
             agent: Some("pi".into()),
@@ -717,9 +705,9 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             .hits
             .agents
             .iter()
-            .map(|(_, pane_id)| pane_id.as_str())
+            .map(|(_, tab_id)| tab_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["pane_2", "pane_3"]
+        vec!["tab_2", "tab_3"]
     );
     assert_eq!(state.hits.agent_sort_toggle, Rect::default());
 
@@ -733,7 +721,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
         [ClientShellAction::Endpoint { request, .. }]
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
+                crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2"
             )
     ));
 
@@ -747,7 +735,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
         [ClientShellAction::Endpoint { request, .. }]
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
+                crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2"
             )
     ));
 }
@@ -1296,8 +1284,8 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         ClientShellAction::Endpoint { request, .. }
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneFocus(params)
-                    if params.pane_id == "pane_2"
+                crate::api::schema::Method::TabFocus(params)
+                    if params.tab_id == "tab_2"
             )
     )));
     assert!(state.visible_notification.is_none());
@@ -1327,8 +1315,8 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         ClientShellAction::Endpoint { request, .. }
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneFocus(params)
-                    if params.pane_id == "pane_2"
+                crate::api::schema::Method::TabFocus(params)
+                    if params.tab_id == "tab_2"
             )
     )));
     assert!(state.visible_notification.is_none());

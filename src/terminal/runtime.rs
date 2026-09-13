@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::events::AppEvent;
 use crate::layout::PaneId;
+use crate::terminal::TerminalId;
 
 /// Live runtime for a server-owned terminal.
 ///
@@ -49,9 +50,10 @@ impl TerminalRuntime {
     #[cfg(unix)]
     pub fn handoff_runtime_state(
         &self,
+        terminal_id: TerminalId,
         pane_id: u32,
     ) -> crate::handoff_runtime::HandoffRuntimeState {
-        self.0.handoff_runtime_state(pane_id)
+        self.0.handoff_runtime_state(terminal_id, pane_id)
     }
 
     #[cfg(unix)]
@@ -61,6 +63,7 @@ impl TerminalRuntime {
 
     #[cfg(unix)]
     pub fn from_handoff_fd(
+        terminal_id: TerminalId,
         import: crate::handoff_runtime::ImportedHandoffRuntime,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
@@ -70,6 +73,7 @@ impl TerminalRuntime {
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
         crate::pane::PaneRuntime::from_handoff_fd(
+            terminal_id,
             import,
             scrollback_limit_bytes,
             host_terminal_theme,
@@ -85,6 +89,7 @@ impl TerminalRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -99,6 +104,7 @@ impl TerminalRuntime {
     ) -> std::io::Result<Self> {
         crate::pane::PaneRuntime::spawn(
             pane_id,
+            terminal_id,
             rows,
             cols,
             cwd,
@@ -118,6 +124,7 @@ impl TerminalRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_with_initial_history(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -133,6 +140,7 @@ impl TerminalRuntime {
     ) -> std::io::Result<Self> {
         crate::pane::PaneRuntime::spawn_with_initial_history(
             pane_id,
+            terminal_id,
             rows,
             cols,
             cwd,
@@ -153,6 +161,7 @@ impl TerminalRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_shell_command(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -168,6 +177,7 @@ impl TerminalRuntime {
     ) -> std::io::Result<Self> {
         crate::pane::PaneRuntime::spawn_shell_command(
             pane_id,
+            terminal_id,
             rows,
             cols,
             cwd,
@@ -188,6 +198,7 @@ impl TerminalRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_argv_command(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -203,6 +214,7 @@ impl TerminalRuntime {
     ) -> std::io::Result<Self> {
         crate::pane::PaneRuntime::spawn_argv_command(
             pane_id,
+            terminal_id,
             rows,
             cols,
             cwd,

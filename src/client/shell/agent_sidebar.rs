@@ -11,7 +11,7 @@ use ratatui::{
 use super::*;
 
 pub(super) struct AgentRow {
-    pub(super) pane_id: String,
+    pub(super) tab_id: String,
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
@@ -25,13 +25,13 @@ pub(super) fn ordered_agent_pane_ids(
         return snapshot
             .agent_order
             .iter()
-            .filter(|pane_id| {
+            .filter_map(|identity| {
                 snapshot
                     .agents
                     .iter()
-                    .any(|agent| agent.pane_id == pane_id.as_str())
+                    .find(|agent| agent.tab_id == *identity || agent.pane_id == *identity)
+                    .map(|agent| agent.tab_id.clone())
             })
-            .cloned()
             .collect();
     }
     let mut agents = snapshot.agents.iter().collect::<Vec<_>>();
@@ -45,7 +45,7 @@ pub(super) fn ordered_agent_pane_ids(
     }
     agents
         .into_iter()
-        .map(|agent| agent.pane_id.clone())
+        .map(|agent| agent.tab_id.clone())
         .collect()
 }
 
@@ -81,7 +81,7 @@ pub(super) fn render_agent_panel(
         hits,
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
-            hits.agents.push((rect, row.pane_id.clone()));
+            hits.agents.push((rect, row.tab_id.clone()));
             render_agent_row(buffer, rect, row, config);
         },
     );
@@ -241,11 +241,11 @@ pub(super) fn agent_rows(
 ) -> Vec<AgentRow> {
     ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
         .into_iter()
-        .filter_map(|pane_id| {
+        .filter_map(|tab_id| {
             let agent = snapshot
                 .agents
                 .iter()
-                .find(|agent| agent.pane_id == pane_id)?;
+                .find(|agent| agent.tab_id == tab_id)?;
             let workspace = snapshot
                 .workspaces
                 .iter()
@@ -302,7 +302,7 @@ pub(super) fn agent_rows(
                 state_text,
             );
             Some(AgentRow {
-                pane_id: agent.pane_id.clone(),
+                tab_id: agent.tab_id.clone(),
                 status: agent.agent_status,
                 focused: agent.focused,
                 rows,

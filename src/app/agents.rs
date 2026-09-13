@@ -26,11 +26,10 @@ impl App {
             .iter()
             .enumerate()
             .flat_map(|(ws_idx, ws)| {
-                ws.tabs.iter().flat_map(move |tab| {
-                    tab.layout
-                        .pane_ids()
-                        .into_iter()
-                        .filter_map(move |pane_id| self.agent_info(ws_idx, pane_id))
+                ws.layout.pane_ids().into_iter().flat_map(move |pane_id| {
+                    let tab_count = ws.pane_state(pane_id).map_or(0, |pane| pane.tabs.len());
+                    (0..tab_count)
+                        .filter_map(move |tab_idx| self.agent_info_at(ws_idx, pane_id, tab_idx))
                 })
             })
             .collect()
@@ -44,8 +43,13 @@ impl App {
             .state
             .workspaces
             .get(resolved.ws_idx)
-            .and_then(|workspace| workspace.terminal_id(resolved.pane_id))
-            .cloned()
+            .and_then(|workspace| {
+                workspace
+                    .pane_state(resolved.pane_id)?
+                    .tabs
+                    .get(resolved.tab_idx)
+                    .map(|tab| tab.terminal_id.clone())
+            })
         else {
             return;
         };
@@ -66,7 +70,7 @@ impl App {
         target: &str,
     ) -> Result<crate::api::schema::AgentInfo, TerminalTargetError> {
         let resolved = self.resolve_agent_target(target)?;
-        self.agent_info(resolved.ws_idx, resolved.pane_id)
+        self.agent_info_at(resolved.ws_idx, resolved.pane_id, resolved.tab_idx)
             .ok_or_else(|| TerminalTargetError::NotFound {
                 target: target.to_string(),
             })
@@ -79,9 +83,15 @@ impl App {
         let resolved = self.resolve_agent_target(target)?;
         self.state
             .focus_pane_in_workspace(resolved.ws_idx, resolved.pane_id);
+        self.state.workspaces[resolved.ws_idx]
+            .pane_state_mut(resolved.pane_id)
+            .expect("resolved owner pane must exist")
+            .switch_tab(resolved.tab_idx);
+        self.state.mark_session_dirty();
         self.state.mark_active_tab_seen();
         self.state.mode = crate::app::Mode::Terminal;
-        self.agent_info(resolved.ws_idx, resolved.pane_id)
+        self.schedule_session_save();
+        self.agent_info_at(resolved.ws_idx, resolved.pane_id, resolved.tab_idx)
             .ok_or_else(|| TerminalTargetError::NotFound {
                 target: target.to_string(),
             })
@@ -134,7 +144,7 @@ impl App {
         self.state.mark_session_dirty();
         self.schedule_session_save();
         self.emit_pane_updated(resolved.ws_idx, resolved.pane_id);
-        self.agent_info(resolved.ws_idx, resolved.pane_id)
+        self.agent_info_at(resolved.ws_idx, resolved.pane_id, resolved.tab_idx)
             .ok_or_else(|| {
                 AgentRenameError::Target(TerminalTargetError::NotFound {
                     target: target.to_string(),
@@ -368,36 +378,58 @@ impl App {
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
     ) -> Option<crate::api::schema::AgentInfo> {
+        let tab_idx = self
+            .state
+            .workspaces
+            .get(ws_idx)?
+            .pane_state(pane_id)?
+            .active_tab;
+        self.agent_info_at(ws_idx, pane_id, tab_idx)
+    }
+
+    pub(super) fn agent_info_at(
+        &self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        tab_idx: usize,
+    ) -> Option<crate::api::schema::AgentInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_state = ws.pane_state(pane_id)?;
-        let terminal = self.state.terminals.get(&pane_state.attached_terminal_id)?;
+        let pane_tab = pane_state.tabs.get(tab_idx)?;
+        let terminal = self.state.terminals.get(&pane_tab.terminal_id)?;
         if !terminal.is_agent_terminal() {
             return None;
         }
-        let pane = self.pane_info(ws_idx, pane_id)?;
+        let presentation = terminal.effective_presentation();
+        let pane_focused =
+            self.state.active == Some(ws_idx) && ws.focused_pane_id() == Some(pane_id);
         Some(crate::api::schema::AgentInfo {
-            terminal_id: pane.terminal_id,
+            terminal_id: terminal.id.to_string(),
             name: terminal.agent_name.clone(),
-            agent: pane.agent,
-            title: pane.title,
-            terminal_title: pane.terminal_title,
-            terminal_title_stripped: pane.terminal_title_stripped,
-            display_agent: pane.display_agent,
-            agent_status: pane.agent_status,
+            agent: terminal.effective_agent_label().map(str::to_string),
+            title: presentation.title,
+            terminal_title: terminal.terminal_title.clone(),
+            terminal_title_stripped: terminal.terminal_title_stripped(),
+            display_agent: presentation.display_agent,
+            agent_status: super::api_helpers::pane_agent_status(terminal.state, pane_tab.seen),
             screen_detection_skipped: terminal.full_lifecycle_hook_authority_active(),
-            state_labels: pane.state_labels,
-            tokens: pane.tokens,
-            agent_session: pane.agent_session,
-            workspace_id: pane.workspace_id,
-            tab_id: pane.tab_id,
-            pane_id: pane.pane_id,
-            focused: pane.focused,
+            state_labels: presentation.state_labels,
+            tokens: terminal.metadata_tokens.values(),
+            agent_session: super::creation::terminal_agent_session_info(terminal),
+            workspace_id: self.public_workspace_id(ws_idx),
+            tab_id: self.public_tab_id_for_pane(ws_idx, pane_id, tab_idx)?,
+            pane_id: self.public_pane_id(ws_idx, pane_id)?,
+            focused: pane_focused && pane_state.active_tab == tab_idx,
             launch_pending: terminal.managed_agent_launch_pending(),
             interactive_ready: terminal.managed_agent_interactive_ready(),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
-            cwd: pane.cwd,
-            foreground_cwd: pane.foreground_cwd,
-            revision: pane.revision,
+            cwd: Some(terminal.cwd.display().to_string()),
+            foreground_cwd: self
+                .terminal_runtimes
+                .get(&terminal.id)
+                .and_then(crate::terminal::TerminalRuntime::foreground_cwd)
+                .map(|cwd| cwd.display().to_string()),
+            revision: terminal.revision,
         })
     }
 

@@ -1,12 +1,12 @@
 #!/bin/sh
 # managed by herdl; reinstalling the integration replaces this file.
 # HERDL_INTEGRATION_ID=qodercli
-# HERDL_INTEGRATION_VERSION=3
+# HERDL_INTEGRATION_VERSION=4
 
 [ "${1:-}" = "session" ] || exit 0
 [ "${HERDL_ENV:-}" = "1" ] || exit 0
 [ -n "${HERDL_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDL_PANE_ID:-}" ] || exit 0
+[ -n "${HERDL_TAB_ID:-${HERDL_PANE_ID:-}}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 python3 -c '
@@ -24,7 +24,7 @@ try:
     subprocess.run(
         [
             os.environ.get("HERDL_BIN_PATH") or "herdl",
-            "pane", "report-agent-session", os.environ["HERDL_PANE_ID"],
+            "pane", "report-agent-session", os.environ.get("HERDL_TAB_ID") or os.environ["HERDL_PANE_ID"],
             "--source", "herdl:qodercli", "--agent", "qodercli",
             "--agent-session-id", session_id, "--seq", str(time.time_ns()),
         ],

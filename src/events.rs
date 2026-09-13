@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use crate::detect::{Agent, AgentState};
 use crate::layout::PaneId;
+use crate::terminal::TerminalId;
 use crate::workspace::{GitStatusCacheEntry, WorkspaceGitStatus};
 
 #[derive(Debug)]
@@ -55,9 +56,10 @@ pub struct WorktreeRemoveResult {
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
-    /// A pane's child process exited.
+    /// A terminal's child process exited.
     PaneDied {
         pane_id: PaneId,
+        terminal_id: TerminalId,
         exit_reason: crate::platform::ChildExitReason,
     },
     /// A worktree-removal runtime could not be restored normally.
@@ -65,12 +67,14 @@ pub enum AppEvent {
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,
+        terminal_id: TerminalId,
         agent: Agent,
         observed_at: Instant,
     },
-    /// Fallback detector state changed in a pane.
+    /// Fallback detector state changed in a terminal.
     StateChanged {
         pane_id: PaneId,
+        terminal_id: TerminalId,
         agent: Option<Agent>,
         state: AgentState,
         visible_blocker: bool,
@@ -78,9 +82,10 @@ pub enum AppEvent {
         process_exited: bool,
         observed_at: Instant,
     },
-    /// Hook-authoritative agent state was reported for a pane.
+    /// Hook-authoritative agent state was reported for a terminal.
     HookStateReported {
         pane_id: PaneId,
+        terminal_id: TerminalId,
         source: String,
         agent_label: String,
         state: AgentState,
@@ -90,16 +95,16 @@ pub enum AppEvent {
     },
     /// Agent session identity was reported without state authority.
     AgentSessionReported {
-        pane_id: PaneId,
+        terminal_id: TerminalId,
         source: String,
         agent_label: String,
         seq: Option<u64>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
         session_start_source: Option<String>,
     },
-    /// Display-only agent metadata was reported for a pane.
+    /// Display-only agent metadata was reported for a terminal.
     HookMetadataReported {
-        pane_id: PaneId,
+        terminal_id: TerminalId,
         source: String,
         agent_label: Option<String>,
         applies_to_source: Option<String>,
@@ -112,15 +117,17 @@ pub enum AppEvent {
         seq: Option<u64>,
         ttl: Option<std::time::Duration>,
     },
-    /// Hook authority was explicitly cleared for a pane.
+    /// Hook authority was explicitly cleared for a terminal.
     HookAuthorityCleared {
         pane_id: PaneId,
+        terminal_id: TerminalId,
         source: Option<String>,
         seq: Option<u64>,
     },
-    /// The current detected agent gracefully released this pane back to the shell.
+    /// The current detected agent gracefully released this terminal back to the shell.
     HookAgentReleased {
         pane_id: PaneId,
+        terminal_id: TerminalId,
         source: String,
         agent_label: String,
         known_agent: Option<Agent>,
@@ -137,16 +144,25 @@ pub enum AppEvent {
         activated: Vec<crate::detect::Agent>,
         status: crate::detect::manifest_update::ManifestUpdateStatus,
     },
-    /// A pane child emitted one or more executable BEL characters.
+    /// A terminal child emitted one or more executable BEL characters.
     /// The host-facing process forwards them to its outer terminal.
-    TerminalBell { pane_id: PaneId, count: u16 },
-    /// A pane child emitted a valid OSC 52 clipboard write. The main loop
+    TerminalBell {
+        pane_id: PaneId,
+        terminal_id: TerminalId,
+        count: u16,
+    },
+    /// A terminal child emitted a valid OSC 52 clipboard write. The main loop
     /// re-emits it through herdr's own clipboard writer.
-    ClipboardWrite { content: Vec<u8> },
-    /// A pane child reported its shell current directory through terminal
+    ClipboardWrite {
+        pane_id: PaneId,
+        terminal_id: TerminalId,
+        content: Vec<u8>,
+    },
+    /// A terminal child reported its shell current directory through terminal
     /// metadata such as OSC 7.
     TerminalCwdReported {
         pane_id: PaneId,
+        terminal_id: TerminalId,
         cwd: std::path::PathBuf,
     },
     /// Background git status refresh completed for workspaces.

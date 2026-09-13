@@ -140,22 +140,34 @@ impl App {
             let Some((workspace_index, pane)) = self.parse_pane_id(pane_id) else {
                 return Err(("pane_not_found", format!("pane not found: {pane_id}")));
             };
-            let Some(tab_index) =
-                self.state.workspaces[workspace_index].find_tab_index_for_pane(pane)
+            let Some(tab_index) = self.state.workspaces[workspace_index]
+                .pane_state(pane)
+                .map(|pane| pane.active_tab)
             else {
                 return Err(("pane_not_found", format!("pane not found: {pane_id}")));
             };
-            self.validate_client_shell_command_parent_ids(params, workspace_index, tab_index)?;
+            self.validate_client_shell_command_parent_ids(
+                params,
+                workspace_index,
+                pane,
+                tab_index,
+            )?;
             self.state.focus_pane_in_workspace(workspace_index, pane);
             return Ok(());
         }
 
         if let Some(tab_id) = params.tab_id.as_deref() {
-            let Some((workspace_index, tab_index)) = self.parse_tab_id(tab_id) else {
+            let Some((workspace_index, pane_id, tab_index)) = self.parse_public_tab_id(tab_id)
+            else {
                 return Err(("tab_not_found", format!("tab not found: {tab_id}")));
             };
             self.validate_client_shell_command_workspace_id(params, workspace_index)?;
-            self.state.switch_workspace_tab(workspace_index, tab_index);
+            self.state.focus_pane_in_workspace(workspace_index, pane_id);
+            self.state.workspaces[workspace_index]
+                .pane_state_mut(pane_id)
+                .expect("resolved pane must exist")
+                .switch_tab(tab_index);
+            self.state.mark_session_dirty();
             return Ok(());
         }
 
@@ -175,12 +187,13 @@ impl App {
         &self,
         params: &crate::api::schema::CommandInvokeParams,
         workspace_index: usize,
+        pane_id: crate::layout::PaneId,
         tab_index: usize,
     ) -> Result<(), (&'static str, String)> {
         self.validate_client_shell_command_workspace_id(params, workspace_index)?;
         if let Some(tab_id) = params.tab_id.as_deref() {
             let actual = self
-                .public_tab_id(workspace_index, tab_index)
+                .public_tab_id_for_pane(workspace_index, pane_id, tab_index)
                 .unwrap_or_default();
             if tab_id != actual {
                 return Err((
@@ -260,20 +273,24 @@ impl App {
                 self.public_workspace_id(ws_idx),
             ));
             if let Some(workspace) = self.state.workspaces.get(ws_idx) {
-                let tab_idx = workspace.active_tab_index();
-                if let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) {
-                    env.push((crate::product::ACTIVE_TAB_ID_ENV_VAR.to_string(), tab_id));
-                }
                 if let Some(pane_id) = workspace.focused_pane_id() {
+                    let tab_idx = workspace
+                        .pane_state(pane_id)
+                        .map_or(0, |pane| pane.active_tab);
+                    if let Some(tab_id) = self.public_tab_id_for_pane(ws_idx, pane_id, tab_idx) {
+                        env.push((crate::product::ACTIVE_TAB_ID_ENV_VAR.to_string(), tab_id));
+                    }
                     if let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) {
                         env.push((
                             crate::product::ACTIVE_PANE_ID_ENV_VAR.to_string(),
                             public_pane_id,
                         ));
                     }
-                    if let Some(pane_cwd) = workspace.active_tab().and_then(|tab| {
-                        tab.cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
-                    }) {
+                    if let Some(pane_cwd) = workspace.cwd_for_pane(
+                        pane_id,
+                        &self.state.terminals,
+                        &self.terminal_runtimes,
+                    ) {
                         env.push((
                             crate::product::ACTIVE_PANE_CWD_ENV_VAR.to_string(),
                             pane_cwd.display().to_string(),
@@ -387,14 +404,12 @@ impl App {
         let previous_focus = ws
             .focused_pane_id()
             .ok_or_else(|| std::io::Error::other("no focused pane"))?;
-        let previous_zoomed = ws.active_tab().map(|tab| tab.zoomed).unwrap_or(false);
-        let cwd = ws.active_tab().and_then(|tab| {
-            tab.cwd_for_pane(
-                previous_focus,
-                &self.state.terminals,
-                &self.terminal_runtimes,
-            )
-        });
+        let previous_zoomed = ws.zoomed;
+        let cwd = ws.cwd_for_pane(
+            previous_focus,
+            &self.state.terminals,
+            &self.terminal_runtimes,
+        );
         let new_pane = ws.split_focused_command(
             Direction::Horizontal,
             new_rows,
@@ -419,13 +434,8 @@ impl App {
         if previous_focus_target.as_ref() != Some(&new_focus_target) {
             self.state.previous_pane_focus = previous_focus_target;
         }
-        ws.active_tab_mut()
-            .expect("workspace must have an active tab")
-            .layout
-            .focus_pane(new_pane_id);
-        ws.active_tab_mut()
-            .expect("workspace must have an active tab")
-            .zoomed = true;
+        ws.layout.focus_pane(new_pane_id);
+        ws.zoomed = true;
         self.overlay_panes.insert(
             new_pane_id,
             super::OverlayPaneState {
@@ -465,13 +475,11 @@ impl App {
             .focused_pane_id()
             .ok_or_else(|| std::io::Error::other("no focused pane"))?;
         let cwd = cwd.or_else(|| {
-            ws.active_tab().and_then(|tab| {
-                tab.cwd_for_pane(
-                    previous_focus,
-                    &self.state.terminals,
-                    &self.terminal_runtimes,
-                )
-            })
+            ws.cwd_for_pane(
+                previous_focus,
+                &self.state.terminals,
+                &self.terminal_runtimes,
+            )
         });
 
         let (tab_idx, new_pane, workspace_id) = {
@@ -480,7 +488,7 @@ impl App {
                 .workspaces
                 .get_mut(ws_idx)
                 .ok_or_else(|| std::io::Error::other("active workspace disappeared"))?;
-            let previous_zoomed = ws.active_tab().map(|tab| tab.zoomed).unwrap_or(false);
+            let previous_zoomed = ws.zoomed;
             let result = ws.split_pane_argv_command(
                 previous_focus,
                 Direction::Horizontal,
@@ -499,10 +507,7 @@ impl App {
                 Some(Err(err)) => return Err(err),
                 None => return Err(std::io::Error::other("focused pane disappeared")),
             };
-            ws.tabs
-                .get_mut(tab_idx)
-                .ok_or_else(|| std::io::Error::other("plugin overlay tab disappeared"))?
-                .zoomed = true;
+            ws.zoomed = true;
             self.overlay_panes.insert(
                 new_pane.pane_id,
                 super::OverlayPaneState {
@@ -694,7 +699,7 @@ mod tests {
     async fn plugin_command_rejects_stale_client_selection_before_invocation() {
         let mut app = test_app();
         let workspace = crate::workspace::Workspace::test_new("plugin-selection");
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
@@ -709,7 +714,7 @@ mod tests {
         install(&mut app, plugin);
         let command_id = app.client_shell_command_manifest()[0].command_id.clone();
         let workspace_id = app.public_workspace_id(0);
-        let tab_id = app.public_tab_id(0, 0).unwrap();
+        let tab_id = app.public_tab_id_for_pane(0, pane_id, 0).unwrap();
         let pane_id = app.public_pane_id(0, pane_id).unwrap();
 
         let response = app.handle_command_invoke(

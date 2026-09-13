@@ -738,7 +738,7 @@ fn mobile_items(
                 background,
                 target: Some(ClientMobileTarget::Agent {
                     endpoint_id: endpoint.endpoint_id.clone(),
-                    pane_id: agent.pane_id.clone(),
+                    pane_id: agent.tab_id.clone(),
                 }),
             });
         }
@@ -1035,7 +1035,7 @@ impl ClientShellState {
             }) => {
                 if self.focus_or_activate(
                     endpoint_id,
-                    ClientEndpointFocusTarget::Pane(pane_id),
+                    ClientEndpointFocusTarget::Tab(pane_id),
                     outcome,
                 ) {
                     self.mode = ClientShellMode::Terminal;

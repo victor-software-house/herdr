@@ -64,10 +64,10 @@ Custom integrations can also report state that is not visible in the native term
 
 ## Integrate your own agent
 
-An agent running in a Herdr pane inherits `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_BIN_PATH`, and `HERDR_SOCKET_PATH`. If the agent exposes lifecycle hooks, use those hooks to report semantic state through Herdr's CLI:
+An agent running in a Herdr pane inherits `HERDR_ENV`, `HERDR_TAB_ID`, `HERDR_PANE_ID`, `HERDR_BIN_PATH`, and `HERDR_SOCKET_PATH`. `HERDR_TAB_ID` is the exact pane-owned terminal tab. If the agent exposes lifecycle hooks, use those hooks to report semantic state through Herdr's CLI:
 
 ```bash
-"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_TAB_ID" \
   --source custom:my-agent \
   --agent my-agent \
   --state working
@@ -76,12 +76,12 @@ An agent running in a Herdr pane inherits `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_B
 Report `idle` when the agent is ready for input and `blocked` when it needs a user decision. Use `--message` to describe a block. When the agent exits, release the same source's lifecycle authority:
 
 ```bash
-"$HERDR_BIN_PATH" pane release-agent "$HERDR_PANE_ID" \
+"$HERDR_BIN_PATH" pane release-agent "$HERDR_TAB_ID" \
   --source custom:my-agent \
   --agent my-agent
 ```
 
-Report only when `HERDR_ENV=1` and the required variables are present. This keeps the integration a no-op outside Herdr. Keep `--source` stable and unique to the integration. If reports can arrive out of order, include a strictly increasing `--seq`; Herdr ignores stale sequence numbers from the same source.
+Report only when `HERDR_ENV=1` and the required variables are present. Prefer `HERDR_TAB_ID` for every state, session, metadata, clear, and release report. `HERDR_PANE_ID` remains a legacy fallback only for panes with one tab; reports against a stacked pane fail with `pane_target_ambiguous` and candidate tab IDs. This keeps the integration a no-op outside Herdr. Keep `--source` stable and unique to the integration. If reports can arrive out of order, include a strictly increasing `--seq`; Herdr ignores stale sequence numbers from the same source.
 
 You can include `--agent-session-id` or `--agent-session-path` with `report-agent`, or use `pane report-agent-session` when session identity changes independently of state. Herdr exposes that reference through its pane and agent APIs. Automatic session restore also requires Herdr to know how to launch that agent and resume the referenced session.
 

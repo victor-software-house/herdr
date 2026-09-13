@@ -1655,7 +1655,7 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
         let mut app = test_app();
         let mut workspace = crate::workspace::Workspace::test_new("plugin-target");
         workspace.custom_name = None;
-        let root_pane = workspace.tabs[0].root_pane;
+        let root_pane = workspace.root_pane;
         let root_terminal = workspace.terminal_id(root_pane).cloned().unwrap();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
@@ -2123,7 +2123,7 @@ command = ["sh", "-c", "sleep 1"]
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.mode = crate::app::Mode::Terminal;
-        let root_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let root_pane = app.state.workspaces[0].root_pane;
         let root_public = app.public_pane_id(0, root_pane).unwrap();
 
         let root = unique_temp_path("plugin-pane-popup");
@@ -2187,8 +2187,8 @@ command = ["sh", "-c", "printf %s ${{HERDL_PANE_ID-unset}} > '{}'; sleep 1"]
             .expect("popup rects");
         assert_eq!((outer.width, outer.height), (80, 12));
         assert_eq!((inner.width, inner.height), (77, 10));
-        assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
-        assert!(!app.state.workspaces[0].tabs[0].zoomed);
+        assert_eq!(app.state.workspaces[0].layout.pane_count(), 1);
+        assert!(!app.state.workspaces[0].zoomed);
 
         let pane_list = app.handle_api_request(Request {
             id: "pane-list-popup".into(),
@@ -2208,8 +2208,16 @@ command = ["sh", "-c", "printf %s ${{HERDL_PANE_ID-unset}} > '{}'; sleep 1"]
         );
         assert!(event_hub.events_after(0).is_empty());
 
+        let terminal_id = app
+            .state
+            .popup_pane
+            .as_ref()
+            .expect("popup state")
+            .terminal_id
+            .clone();
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id: opened_pane_id,
+            terminal_id,
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
         assert!(app.state.popup_pane.is_none());
@@ -2384,7 +2392,7 @@ command = ["sh", "-c", "printf %s ${{HERDL_PANE_ID-unset}} > '{}'; sleep 1"]
         let mut app = test_app();
         app.policy.persist_plugin_registry = true;
         let workspace = crate::workspace::Workspace::test_new("plugin-refresh");
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
@@ -2620,7 +2628,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDL_PLUGIN_ROOT\" \"$HERDL_PLUG
     async fn current_plugin_context_leaves_client_owned_selection_empty() {
         let mut app = test_app();
         let workspace = crate::workspace::Workspace::test_new("plugin-selection");
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
@@ -2781,7 +2789,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDL_PLUGIN_CONTEXT_JSON\" > {}"]
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        let active_pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let active_pane_id = app.state.workspaces[0].root_pane;
         let active_public_pane_id = app.public_pane_id(0, active_pane_id).unwrap();
         let workspace_id = app.public_workspace_id(0);
         let closed_tab_id = format!("{workspace_id}:t99");
@@ -2906,7 +2914,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDL_PLUGIN_CONTEXT_JSON\" > {}"]
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let pane_id = app.state.workspaces[0].root_pane;
         let root = unique_temp_path("plugin-link-handler");
         write_manifest_content(
             &root,
@@ -3118,9 +3126,9 @@ action = "missing"
             checkout_path: "/repo/herdr-issue".into(),
             is_linked_worktree: true,
         });
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let pane_id = app.state.workspaces[0].root_pane;
         let pane_public = app.public_pane_id(0, pane_id).unwrap();
-        let tab_public = app.public_tab_id(0, 0).unwrap();
+        let tab_public = app.public_tab_id_for_pane(0, pane_id, 0).unwrap();
         let workspace_public = app.public_workspace_id(0);
         let _ = app.handle_pane_report_agent(
             "report".into(),
@@ -3393,7 +3401,9 @@ command = ["sh", "-c", "echo ok"]
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let pane_id = app.state.workspaces[0].root_pane;
+        app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
         app.state.plugin_panes.insert(
             pane_id,
@@ -3440,7 +3450,7 @@ command = ["sh", "-c", "echo ok"]
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let pane_id = app.state.workspaces[0].root_pane;
         app.state.plugin_panes.insert(
             pane_id,
             crate::app::state::PluginPaneRecord {
@@ -3449,8 +3459,13 @@ command = ["sh", "-c", "echo ok"]
             },
         );
 
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .cloned()
+            .unwrap();
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id,
+            terminal_id,
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
 

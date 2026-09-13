@@ -169,7 +169,7 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 `layout.export` 返回可移植的标签页布局树。省略 `tab_id` 和 `pane_id` 导出活动标签页,传 `tab_id` 导出该标签页,或传 `pane_id` 导出包含该窗格的标签页。
 
 ```json
-{"id":"req_export","method":"layout.export","params":{"tab_id":"w1:t1"}}
+{"id":"req_export","method":"layout.export","params":{"tab_id":"w1:p1:t1"}}
 ```
 
 响应包含 `workspace_id`、`tab_id`、`zoomed`、`focused_pane_id` 和 `root`。`root` 是由 `pane` 和 `split` 节点组成的 BSP 树。窗格节点可以包含 `pane_id`、`label`、`cwd` 和 argv `command`。分割节点使用 `direction` (`right` 或 `down`)、`ratio`、`first` 和 `second`。
@@ -208,7 +208,7 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 `layout.set_split_ratio` 更新标签页布局中已有分割的比例。响应是 `type: "layout_split_ratio_set"`,并包含更新后的可移植 `layout`。
 
 ```json
-{"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
+{"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:p1:t1","path":[],"ratio":0.6}}
 ```
 
 启动进程的方法接受一个 `env` 对象。Herdr 只把这些键值对应用到新启动的进程。Herdr 还向受管窗格进程注入 `HERDR_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID` 和 `HERDR_PANE_ID`。与调用方提供的环境变量冲突时,Herdr 管理的变量保持权威。
@@ -225,7 +225,7 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 `pane.move` 把运行中的窗格移动到另一个标签页、新标签页或新工作区:
 
 ```json
-{"id":"req_move_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab","tab_id":"w1:t2","target_pane_id":"w1:p3","split":"right","ratio":0.5},"focus":true}}
+{"id":"req_move_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab","tab_id":"w1:p3:t2","target_pane_id":"w1:p3","split":"right","ratio":0.5},"focus":true}}
 {"id":"req_move_new_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_tab","workspace_id":"w1","label":"logs"},"focus":true}}
 {"id":"req_move_new_workspace","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_workspace","label":"logs","tab_label":"main"},"focus":true}}
 ```
@@ -519,14 +519,14 @@ Herdr 在本地 socket 上使用换行分隔的 JSON。在 Unix 上,那个 socke
 
 ## 智能体状态上报
 
-集成用 `pane.report_agent` 上报智能体状态。
+集成用 `pane.report_agent` 上报智能体状态。请使用通过 `HERDR_TAB_ID` 继承的、带窗格限定的精确标签页 ID。
 
 ```json
 {
   "id": "req_1",
   "method": "pane.report_agent",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "custom:docs",
     "agent": "docs-bot",
     "state": "working",
@@ -544,13 +544,15 @@ Herdr 在本地 socket 上使用换行分隔的 JSON。在 Unix 上,那个 socke
   "id": "req_2",
   "method": "pane.report_agent_session",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "herdr:codex",
     "agent": "codex",
     "agent_session_id": "..."
   }
 }
 ```
+
+上报方法 `pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority` 和 `pane.release_agent` 接受精确终端 ID 或带窗格限定的标签页 ID。旧版窗格 ID 仅适用于单标签页窗格。堆叠标签页窗格不会选择活动标签页,而是返回 `pane_target_ambiguous` 和候选标签页 ID。
 
 Herdr 存有原生会话引用时,`pane.get`、`pane.list`、`agent.get` 和 `agent.list` 暴露一个只读的 `agent_session` 对象:
 
@@ -578,7 +580,7 @@ Herdr 存有原生会话引用时,`pane.get`、`pane.list`、`agent.get` 和 `ag
   "id": "req_2",
   "method": "pane.report_metadata",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "user:claude-title",
     "agent": "claude",
     "title": "Refactor auth middleware",
@@ -682,7 +684,7 @@ herdr agent wait w1:p1 --until blocked
       "pane_id": "w1:p1",
       "terminal_id": "term_abc123",
       "workspace_id": "w1",
-      "tab_id": "w1:t1",
+      "tab_id": "w1:p1:t1",
       "focused": true,
       "agent_status": "working",
       "revision": 42

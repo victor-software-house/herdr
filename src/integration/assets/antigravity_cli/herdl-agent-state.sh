@@ -20,7 +20,7 @@ emit_and_exit() {
 [ "${1:-}" = "session" ] || emit_and_exit
 [ "${HERDL_ENV:-}" = "1" ] || emit_and_exit
 [ -n "${HERDL_SOCKET_PATH:-}" ] || emit_and_exit
-[ -n "${HERDL_PANE_ID:-}" ] || emit_and_exit
+[ -n "${HERDL_TAB_ID:-${HERDL_PANE_ID:-}}" ] || emit_and_exit
 command -v python3 >/dev/null 2>&1 || emit_and_exit
 
 python3 -c '
@@ -48,7 +48,7 @@ if session_id is None:
 
 seq = time.time_ns()
 params = {
-    "pane_id": os.environ["HERDL_PANE_ID"],
+    "pane_id": os.environ.get("HERDL_TAB_ID") or os.environ["HERDL_PANE_ID"],
     "source": "herdl:antigravity_cli",
     "agent": "agy",
     "seq": seq,

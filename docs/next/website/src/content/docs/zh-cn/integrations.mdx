@@ -66,10 +66,10 @@ Herdr 以两种不同方式使用集成:
 
 ## 集成你自己的智能体
 
-在 Herdr 窗格中运行的智能体会继承 `HERDR_ENV`、`HERDR_PANE_ID`、`HERDR_BIN_PATH` 和 `HERDR_SOCKET_PATH`。如果智能体提供生命周期钩子,可从这些钩子通过 Herdr CLI 上报语义状态:
+在 Herdr 窗格中运行的智能体会继承 `HERDR_ENV`、`HERDR_TAB_ID`、`HERDR_PANE_ID`、`HERDR_BIN_PATH` 和 `HERDR_SOCKET_PATH`。`HERDR_TAB_ID` 表示该窗格拥有的精确终端标签页。如果智能体提供生命周期钩子,可从这些钩子通过 Herdr CLI 上报语义状态:
 
 ```bash
-"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_TAB_ID" \
   --source custom:my-agent \
   --agent my-agent \
   --state working
@@ -78,12 +78,12 @@ Herdr 以两种不同方式使用集成:
 当智能体等待输入时上报 `idle`,需要用户决策时上报 `blocked`。用 `--message` 描述阻塞原因。智能体退出时,释放同一来源的生命周期权威:
 
 ```bash
-"$HERDR_BIN_PATH" pane release-agent "$HERDR_PANE_ID" \
+"$HERDR_BIN_PATH" pane release-agent "$HERDR_TAB_ID" \
   --source custom:my-agent \
   --agent my-agent
 ```
 
-仅在 `HERDR_ENV=1` 且必要变量存在时上报,这样集成在 Herdr 外不会执行任何操作。保持 `--source` 稳定且对该集成唯一。如果上报可能乱序到达,请加入严格递增的 `--seq`;Herdr 会忽略同一来源的旧序列号。
+仅在 `HERDR_ENV=1` 且必要变量存在时上报,这样集成在 Herdr 外不会执行任何操作。状态、会话、元数据、清除和释放上报都应优先使用 `HERDR_TAB_ID`。`HERDR_PANE_ID` 只作为单标签页窗格的旧版后备方式;向堆叠标签页窗格上报会失败,返回 `pane_target_ambiguous` 和候选标签页 ID。保持 `--source` 稳定且对该集成唯一。如果上报可能乱序到达,请加入严格递增的 `--seq`;Herdr 会忽略同一来源的旧序列号。
 
 你可以在 `report-agent` 中加入 `--agent-session-id` 或 `--agent-session-path`,也可以在会话身份独立于状态变化时使用 `pane report-agent-session`。Herdr 会通过窗格和智能体 API 暴露该引用。自动恢复会话还要求 Herdr 知道如何启动该智能体并恢复所引用的会话。
 

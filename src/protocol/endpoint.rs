@@ -10,12 +10,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ClientShellSnapshot, ClientSurfaceSize, ServerMessage};
+use super::{ClientShellSnapshot, ClientShellSnapshotV2, ClientSurfaceSize, ServerMessage};
 
 pub const ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
 pub const ENDPOINT_HELLO_KIND: &str = "herdl.endpoint.hello.v1";
 pub const ENDPOINT_WELCOME_KIND: &str = "herdl.endpoint.welcome.v1";
 pub const SNAPSHOT_CODEC_V1: &str = "shell.snapshot.v1";
+pub const SNAPSHOT_CODEC_V2: &str = "shell.snapshot.v2";
 pub const ENDPOINT_SNAPSHOT_KIND: &str = SNAPSHOT_CODEC_V1;
 pub const SURFACE_CODEC_V1: &str = "shell.surface.v1";
 pub const INPUT_CODEC_V1: &str = "shell.input.semantic.v1";
@@ -76,18 +77,34 @@ pub struct EndpointServerWelcome {
     pub error: Option<EndpointHandshakeError>,
 }
 
+#[cfg(test)]
 pub fn snapshot_message(snapshot: &ClientShellSnapshot) -> serde_json::Result<ServerMessage> {
+    snapshot_message_v1(snapshot)
+}
+
+pub fn snapshot_message_v1(snapshot: &ClientShellSnapshot) -> serde_json::Result<ServerMessage> {
     Ok(ServerMessage::EndpointControl {
-        kind: ENDPOINT_SNAPSHOT_KIND.into(),
+        kind: SNAPSHOT_CODEC_V1.into(),
+        data: serde_json::to_string(snapshot)?,
+    })
+}
+
+pub fn snapshot_message_v2(snapshot: &ClientShellSnapshotV2) -> serde_json::Result<ServerMessage> {
+    Ok(ServerMessage::EndpointControl {
+        kind: SNAPSHOT_CODEC_V2.into(),
         data: serde_json::to_string(snapshot)?,
     })
 }
 
 impl EndpointClientHello {
+    pub fn negotiated_snapshot_codec(&self) -> Option<&'static str> {
+        [SNAPSHOT_CODEC_V2, SNAPSHOT_CODEC_V1]
+            .into_iter()
+            .find(|supported| self.snapshot_codecs.iter().any(|codec| codec == supported))
+    }
+
     pub fn supports_required_codecs(&self) -> bool {
-        self.snapshot_codecs
-            .iter()
-            .any(|codec| codec == SNAPSHOT_CODEC_V1)
+        self.negotiated_snapshot_codec().is_some()
             && self
                 .surface_codecs
                 .iter()
@@ -101,11 +118,16 @@ impl EndpointClientHello {
 }
 
 impl EndpointServerWelcome {
+    #[cfg(test)]
     pub fn compatible(methods: Vec<String>) -> Self {
+        Self::compatible_with_snapshot_codec(methods, SNAPSHOT_CODEC_V1)
+    }
+
+    pub fn compatible_with_snapshot_codec(methods: Vec<String>, snapshot_codec: &str) -> Self {
         Self {
             generation: ENDPOINT_PROTOCOL_GENERATION,
             server_version: crate::build_info::version(),
-            snapshot_codec: SNAPSHOT_CODEC_V1.into(),
+            snapshot_codec: snapshot_codec.into(),
             surface_codec: SURFACE_CODEC_V1.into(),
             input_codec: INPUT_CODEC_V1.into(),
             blob_codec: BLOB_CODEC_V1.into(),
@@ -235,6 +257,48 @@ mod tests {
             snapshot.workspaces[0].agent_status,
             crate::api::schema::AgentStatus::Unknown
         );
+    }
+
+    #[test]
+    fn frozen_generation_two_snapshot_decodes_complete_pane_owned_topology() {
+        let snapshot: ClientShellSnapshotV2 = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/endpoint-snapshot-v2.json"
+        )))
+        .unwrap();
+        assert_eq!(snapshot.boot_id, "boot-v2");
+        let workspace = &snapshot.workspaces[0];
+        assert_eq!(workspace.focused_pane_id, "w_alpha:p1");
+        assert_eq!(workspace.panes.len(), 2);
+        assert_eq!(workspace.panes[0].active_tab_id, "w_alpha:p1:t1");
+        assert_eq!(workspace.panes[0].tabs.len(), 2);
+        let inactive_agent = workspace.panes[0].tabs[1].agent.as_ref().unwrap();
+        assert_eq!(inactive_agent.pane_id, "w_alpha:p1");
+        assert_eq!(inactive_agent.tab_id, "w_alpha:p1:t2");
+        assert!(!inactive_agent.focused);
+    }
+
+    #[test]
+    fn snapshot_codec_handshake_matrix_selects_highest_common_codec() {
+        let mut value = hello();
+        value.snapshot_codecs = vec![SNAPSHOT_CODEC_V2.into(), SNAPSHOT_CODEC_V1.into()];
+        assert_eq!(value.negotiated_snapshot_codec(), Some(SNAPSHOT_CODEC_V2));
+
+        value.snapshot_codecs = vec![SNAPSHOT_CODEC_V1.into()];
+        assert_eq!(value.negotiated_snapshot_codec(), Some(SNAPSHOT_CODEC_V1));
+
+        value.snapshot_codecs = vec![SNAPSHOT_CODEC_V2.into()];
+        assert_eq!(value.negotiated_snapshot_codec(), Some(SNAPSHOT_CODEC_V2));
+
+        value.snapshot_codecs = vec!["shell.snapshot.v3".into()];
+        assert_eq!(value.negotiated_snapshot_codec(), None);
+        assert!(!value.supports_required_codecs());
+
+        let old_server = EndpointServerWelcome::compatible(Vec::new());
+        assert_eq!(old_server.snapshot_codec, SNAPSHOT_CODEC_V1);
+        let new_server =
+            EndpointServerWelcome::compatible_with_snapshot_codec(Vec::new(), SNAPSHOT_CODEC_V2);
+        assert_eq!(new_server.snapshot_codec, SNAPSHOT_CODEC_V2);
     }
 
     #[test]

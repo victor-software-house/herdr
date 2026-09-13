@@ -563,7 +563,7 @@ mod tests {
         );
         app.state.workspaces = vec![Workspace::test_new("graphics")];
         app.state.ensure_test_terminals();
-        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let pane = app.state.workspaces[0].root_pane;
         let public = app.public_pane_id(0, pane).unwrap();
         app.state.kitty_graphics_enabled = true;
         (app, public)
@@ -613,7 +613,7 @@ mod tests {
         assert!(pane_visible(&visible));
 
         let hidden_workspace = Workspace::test_new("hidden");
-        let hidden_workspace_pane = hidden_workspace.tabs[0].root_pane;
+        let hidden_workspace_pane = hidden_workspace.root_pane;
         app.state.workspaces.push(hidden_workspace);
         let hidden_workspace_id = app.public_pane_id(1, hidden_workspace_pane).unwrap();
         let hidden = app.handle_pane_graphics_info(
@@ -624,19 +624,19 @@ mod tests {
         );
         assert!(!pane_visible(&hidden));
 
-        let inactive_tab = app.state.workspaces[0].test_add_tab(Some("inactive"));
-        let inactive_pane = app.state.workspaces[0].tabs[inactive_tab].root_pane;
-        let inactive_id = app.public_pane_id(0, inactive_pane).unwrap();
-        let hidden_tab = app.handle_pane_graphics_info(
-            "hidden-tab".into(),
+        app.state.workspaces[0].test_add_tab(Some("inactive"));
+        let stable_pane = app.state.workspaces[0].root_pane;
+        let stable_pane_id = app.public_pane_id(0, stable_pane).unwrap();
+        let visible_stack = app.handle_pane_graphics_info(
+            "pane-tab-stack".into(),
             crate::api::schema::PaneTarget {
-                pane_id: inactive_id,
+                pane_id: stable_pane_id,
             },
         );
-        assert!(!pane_visible(&hidden_tab));
+        assert!(pane_visible(&visible_stack));
 
         app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
-        app.state.workspaces[0].tabs[0].zoomed = true;
+        app.state.workspaces[0].zoomed = true;
         let zoomed_away = app.handle_pane_graphics_info(
             "zoomed-away".into(),
             crate::api::schema::PaneTarget {
@@ -645,7 +645,7 @@ mod tests {
         );
         assert!(!pane_visible(&zoomed_away));
 
-        app.state.workspaces[0].tabs[0].zoomed = false;
+        app.state.workspaces[0].zoomed = false;
         app.state.mode = crate::app::Mode::Navigate;
         let short_lived_mode = app.handle_pane_graphics_info(
             "navigate".into(),

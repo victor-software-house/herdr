@@ -127,7 +127,7 @@ mod tests {
 
         assert_eq!(app.window_title().as_deref(), Some("herd/1"));
 
-        app.state.workspaces[0].tabs[0].custom_name = Some("build".into());
+        app.state.workspaces[0].tab_mut(0).unwrap().custom_name = Some("build".into());
         assert_eq!(app.window_title().as_deref(), Some("herd/build"));
     }
 
@@ -136,9 +136,9 @@ mod tests {
         let mut app = test_app();
         app.configure_window_title("{pane}|{terminal_title}");
 
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app
             .state

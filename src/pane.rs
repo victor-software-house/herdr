@@ -23,6 +23,7 @@ use crate::events::AppEvent;
 use crate::layout::PaneId;
 use crate::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyIoActorHandle, PtyReadResult};
 use crate::render_signal::RenderSignal;
+use crate::terminal::TerminalId;
 
 mod agent_detection;
 mod cursor;
@@ -48,7 +49,7 @@ pub(crate) use self::terminal::{
     TerminalSearchDirection, TerminalSearchWindow, TerminalTextPoint, TerminalWordMotion,
 };
 pub use self::{
-    state::PaneState,
+    state::{PaneState, PaneTab, PaneTabCloseOutcome},
     terminal::{ScrollMetrics, TerminalCursorState},
 };
 
@@ -209,6 +210,7 @@ fn active_pending_release(
 async fn publish_state_changed_event(
     state_events: mpsc::Sender<AppEvent>,
     pane_id: PaneId,
+    terminal_id: TerminalId,
     agent: Option<Agent>,
     state: AgentState,
     visible_blocker: bool,
@@ -222,6 +224,7 @@ async fn publish_state_changed_event(
     if let Err(e) = state_events
         .send(AppEvent::StateChanged {
             pane_id,
+            terminal_id: terminal_id.clone(),
             agent,
             state,
             visible_blocker,
@@ -232,7 +235,7 @@ async fn publish_state_changed_event(
         .await
     {
         warn!(
-            pane = pane_id.raw(),
+            terminal = %terminal_id,
             err = %e,
             "failed to deliver StateChanged event"
         );
@@ -242,19 +245,21 @@ async fn publish_state_changed_event(
 async fn publish_agent_process_detected_event(
     state_events: mpsc::Sender<AppEvent>,
     pane_id: PaneId,
+    terminal_id: TerminalId,
     agent: Agent,
     observed_at: std::time::Instant,
 ) {
     if let Err(e) = state_events
         .send(AppEvent::AgentProcessDetected {
             pane_id,
+            terminal_id: terminal_id.clone(),
             agent,
             observed_at,
         })
         .await
     {
         warn!(
-            pane = pane_id.raw(),
+            terminal = %terminal_id,
             err = %e,
             "failed to deliver AgentProcessDetected event"
         );
@@ -272,7 +277,7 @@ struct AgentDetectionPublishUpdate {
 
 async fn apply_agent_detection_publish_update(
     state_events: mpsc::Sender<AppEvent>,
-    pane_id: PaneId,
+    target: (PaneId, TerminalId),
     agent: Option<Agent>,
     update: AgentDetectionPublishUpdate,
     observed_at: std::time::Instant,
@@ -283,6 +288,7 @@ async fn apply_agent_detection_publish_update(
     last_visible_signal_refresh: &mut Option<std::time::Instant>,
     foreground_shell_exit_reported: &mut bool,
 ) {
+    let (pane_id, terminal_id) = target;
     *state = update.state;
     *last_visible_idle = update.visible_idle;
     *last_visible_blocker = update.visible_blocker;
@@ -298,6 +304,7 @@ async fn apply_agent_detection_publish_update(
     publish_state_changed_event(
         state_events,
         pane_id,
+        terminal_id,
         agent,
         update.state,
         update.visible_blocker,
@@ -708,6 +715,7 @@ fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessPr
 #[cfg(unix)]
 fn spawn_basic_detection_task(
     pane_id: PaneId,
+    terminal_id: TerminalId,
     child_pid: Arc<AtomicU32>,
     terminal: Arc<PaneTerminal>,
     detection_content_seq: Arc<AtomicU64>,
@@ -874,6 +882,7 @@ fn spawn_basic_detection_task(
                             publish_agent_process_detected_event(
                                 state_events.clone(),
                                 pane_id,
+                                terminal_id.clone(),
                                 agent,
                                 now,
                             )
@@ -982,7 +991,7 @@ fn spawn_basic_detection_task(
                 } => {
                     apply_agent_detection_publish_update(
                         state_events.clone(),
-                        pane_id,
+                        (pane_id, terminal_id.clone()),
                         agent,
                         AgentDetectionPublishUpdate {
                             state: new_state,
@@ -1777,13 +1786,22 @@ fn usable_reported_cwd(cwd: std::path::PathBuf) -> Option<std::path::PathBuf> {
     (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
 }
 
-fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<AppEvent>) {
+fn publish_terminal_bells(
+    pane_id: PaneId,
+    terminal_id: &TerminalId,
+    count: u16,
+    events: &mpsc::Sender<AppEvent>,
+) {
     if count == 0 {
         return;
     }
-    if let Err(err) = events.try_send(AppEvent::TerminalBell { pane_id, count }) {
+    if let Err(err) = events.try_send(AppEvent::TerminalBell {
+        pane_id,
+        terminal_id: terminal_id.clone(),
+        count,
+    }) {
         warn!(
-            pane = pane_id.raw(),
+            terminal = %terminal_id,
             count,
             err = %err,
             "failed to queue terminal bell"
@@ -1793,6 +1811,7 @@ fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<App
 
 fn publish_reported_cwd(
     pane_id: PaneId,
+    terminal_id: &TerminalId,
     cwd: std::path::PathBuf,
     reported_cwd: &Arc<Mutex<Option<std::path::PathBuf>>>,
     events: &mpsc::Sender<AppEvent>,
@@ -1806,9 +1825,13 @@ fn publish_reported_cwd(
         }
         *current = Some(cwd.clone());
     }
-    if let Err(err) = events.try_send(AppEvent::TerminalCwdReported { pane_id, cwd }) {
+    if let Err(err) = events.try_send(AppEvent::TerminalCwdReported {
+        pane_id,
+        terminal_id: terminal_id.clone(),
+        cwd,
+    }) {
         warn!(
-            pane = pane_id.raw(),
+            terminal = %terminal_id,
             err = %err,
             "failed to send terminal cwd report"
         );
@@ -1876,11 +1899,13 @@ impl PaneRuntime {
     #[cfg(unix)]
     pub fn handoff_runtime_state(
         &self,
+        terminal_id: TerminalId,
         pane_id: u32,
     ) -> crate::handoff_runtime::HandoffRuntimeState {
         let child_pid = self.child_pid.load(Ordering::Acquire);
         let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
         crate::handoff_runtime::HandoffRuntimeState {
+            terminal_id,
             pane_id,
             child_pid,
             rows,
@@ -1924,6 +1949,7 @@ impl PaneRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -1938,6 +1964,7 @@ impl PaneRuntime {
     ) -> std::io::Result<Self> {
         Self::spawn_with_initial_history(
             pane_id,
+            terminal_id,
             rows,
             cols,
             cwd,
@@ -1957,6 +1984,7 @@ impl PaneRuntime {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn_with_initial_history(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -1978,6 +2006,7 @@ impl PaneRuntime {
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
             pane_id,
+            terminal_id,
             rows,
             cols,
             scrollback_limit_bytes,
@@ -2001,6 +2030,7 @@ impl PaneRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_shell_command(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -2020,6 +2050,7 @@ impl PaneRuntime {
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
             pane_id,
+            terminal_id,
             rows,
             cols,
             scrollback_limit_bytes,
@@ -2039,6 +2070,7 @@ impl PaneRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_argv_command(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         cwd: std::path::PathBuf,
@@ -2067,6 +2099,7 @@ impl PaneRuntime {
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
             pane_id,
+            terminal_id,
             rows,
             cols,
             scrollback_limit_bytes,
@@ -2084,6 +2117,7 @@ impl PaneRuntime {
 
     #[cfg(unix)]
     pub fn from_handoff_fd(
+        terminal_id: TerminalId,
         import: crate::handoff_runtime::ImportedHandoffRuntime,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
@@ -2094,6 +2128,7 @@ impl PaneRuntime {
     ) -> std::io::Result<Self> {
         let crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state } = import;
         let crate::handoff_runtime::HandoffRuntimeState {
+            terminal_id: transferred_terminal_id,
             pane_id,
             child_pid,
             rows,
@@ -2106,6 +2141,7 @@ impl PaneRuntime {
             terminal_title,
             initial_history_ansi,
         } = state;
+        debug_assert_eq!(terminal_id, transferred_terminal_id);
         let pane_id = PaneId::from_raw(pane_id);
         use std::os::fd::FromRawFd;
 
@@ -2157,6 +2193,7 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let read_events = events.clone();
             let reported_cwd = reported_cwd.clone();
+            let read_terminal_id = terminal_id.clone();
             let compression_wake = compression.notifier();
             let rt = tokio::runtime::Handle::current();
             let delay_rt = rt.clone();
@@ -2172,31 +2209,48 @@ impl PaneRuntime {
                 content_seq.fetch_add(1, Ordering::Release);
                 drop(_content_write_guard);
                 compression_wake.wake();
-                publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
+                publish_terminal_bells(
+                    pane_id,
+                    &read_terminal_id,
+                    result.terminal_bells,
+                    &read_events,
+                );
                 observe_detection_content_change(bytes, &detection_content_seq);
-                let title_requested =
-                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
-                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                let title_requested = result.terminal_title_changed
+                    && render_dirty.request_terminal_title(&read_terminal_id);
+                let render_requested =
+                    result.request_render && render_dirty.request_pty(&read_terminal_id);
                 if title_requested || render_requested {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {
                     let render_notify = render_notify.clone();
                     let render_dirty = render_dirty.clone();
+                    let delayed_terminal_id = read_terminal_id.clone();
                     delay_rt.spawn(async move {
                         tokio::time::sleep(delay).await;
-                        if render_dirty.request_pty(pane_id) {
+                        if render_dirty.request_pty(&delayed_terminal_id) {
                             render_notify.notify_one();
                         }
                     });
                 }
                 if let Some(cwd) = result.reported_cwd.clone() {
-                    publish_reported_cwd(pane_id, cwd, &reported_cwd, &read_events);
+                    publish_reported_cwd(
+                        pane_id,
+                        &read_terminal_id,
+                        cwd,
+                        &reported_cwd,
+                        &read_events,
+                    );
                 }
                 for content in result.clipboard_writes {
-                    if let Err(err) = read_events.try_send(AppEvent::ClipboardWrite { content }) {
+                    if let Err(err) = read_events.try_send(AppEvent::ClipboardWrite {
+                        pane_id,
+                        terminal_id: read_terminal_id.clone(),
+                        content,
+                    }) {
                         warn!(
-                            pane = pane_id.raw(),
+                            terminal = %read_terminal_id,
                             err = %err,
                             "failed to queue OSC 52 clipboard write"
                         );
@@ -2207,11 +2261,13 @@ impl PaneRuntime {
                 }
             });
             let exit_events = events.clone();
+            let exit_terminal_id = terminal_id.clone();
             let on_reader_exit = Box::new(move || {
                 // Imported handoff panes have no child wait handle, so their exit cause is
                 // unknowable. Checkpoint conservatively; normal autosave settles clean exits.
                 let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {
                     pane_id,
+                    terminal_id: exit_terminal_id.clone(),
                     exit_reason: crate::platform::ChildExitReason::Handoff,
                 }));
                 debug!(pane = pane_id.raw(), "handoff PTY actor exiting");
@@ -2228,6 +2284,7 @@ impl PaneRuntime {
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
         let (detect_handle, detect_reset_notify, pending_release) = spawn_basic_detection_task(
             pane_id,
+            terminal_id.clone(),
             child_pid.clone(),
             terminal.clone(),
             detection_content_seq.clone(),
@@ -2260,6 +2317,7 @@ impl PaneRuntime {
     #[allow(clippy::too_many_arguments)]
     fn spawn_command_builder(
         pane_id: PaneId,
+        terminal_id: TerminalId,
         rows: u16,
         cols: u16,
         scrollback_limit_bytes: usize,
@@ -2311,6 +2369,7 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let child_wait_completed = child_wait_completed.clone();
             let events = events.clone();
+            let exit_terminal_id = terminal_id.clone();
             let rt = tokio::runtime::Handle::current();
             let mut child = spawned.child;
             if let Some(pid) = child.process_id() {
@@ -2334,9 +2393,10 @@ impl PaneRuntime {
                 // Use blocking send — PaneDied is critical, must not be dropped
                 if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
                     pane_id,
+                    terminal_id: exit_terminal_id.clone(),
                     exit_reason,
                 })) {
-                    error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
+                    error!(pane = pane_id.raw(), terminal = %exit_terminal_id, err = %e, "failed to send PaneDied event");
                 }
             });
         }
@@ -2352,6 +2412,7 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let events = events.clone();
             let reported_cwd = reported_cwd.clone();
+            let read_terminal_id = terminal_id.clone();
             let compression_wake = compression.notifier();
             let rt = tokio::runtime::Handle::current();
             let on_read = Box::new(move |bytes: &[u8]| {
@@ -2366,33 +2427,39 @@ impl PaneRuntime {
                 content_seq.fetch_add(1, Ordering::Release);
                 drop(_content_write_guard);
                 compression_wake.wake();
-                publish_terminal_bells(pane_id, result.terminal_bells, &events);
+                publish_terminal_bells(pane_id, &read_terminal_id, result.terminal_bells, &events);
                 if agent_detection == AgentDetection::Enabled {
                     observe_detection_content_change(bytes, &detection_content_seq);
                 }
-                let title_requested =
-                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
-                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                let title_requested = result.terminal_title_changed
+                    && render_dirty.request_terminal_title(&read_terminal_id);
+                let render_requested =
+                    result.request_render && render_dirty.request_pty(&read_terminal_id);
                 if title_requested || render_requested {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {
                     let render_notify = render_notify.clone();
                     let render_dirty = render_dirty.clone();
+                    let delayed_terminal_id = read_terminal_id.clone();
                     rt.spawn(async move {
                         tokio::time::sleep(delay).await;
-                        if render_dirty.request_pty(pane_id) {
+                        if render_dirty.request_pty(&delayed_terminal_id) {
                             render_notify.notify_one();
                         }
                     });
                 }
                 if let Some(cwd) = result.reported_cwd.clone() {
-                    publish_reported_cwd(pane_id, cwd, &reported_cwd, &events);
+                    publish_reported_cwd(pane_id, &read_terminal_id, cwd, &reported_cwd, &events);
                 }
                 for content in result.clipboard_writes {
-                    if let Err(err) = events.try_send(AppEvent::ClipboardWrite { content }) {
+                    if let Err(err) = events.try_send(AppEvent::ClipboardWrite {
+                        pane_id,
+                        terminal_id: read_terminal_id.clone(),
+                        content,
+                    }) {
                         warn!(
-                            pane = pane_id.raw(),
+                            terminal = %read_terminal_id,
                             err = %err,
                             "failed to send OSC 52 clipboard write"
                         );
@@ -2428,6 +2495,7 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let terminal = terminal.clone();
             let state_events = events.clone();
+            let detection_terminal_id = terminal_id.clone();
             let detection_content_seq = detection_content_seq.clone();
             let full_lifecycle_authority_active_for_task = full_lifecycle_authority_active.clone();
             let render_notify = render_notify.clone();
@@ -2643,6 +2711,7 @@ impl PaneRuntime {
                                         publish_agent_process_detected_event(
                                             state_events.clone(),
                                             pane_id,
+                                            detection_terminal_id.clone(),
                                             agent,
                                             now,
                                         )
@@ -2678,7 +2747,7 @@ impl PaneRuntime {
                     // Keep the terminal restore side effect separate from render notification state.
                     #[allow(clippy::collapsible_if)]
                     if pid > 0 && terminal.maybe_restore_host_terminal_theme(pane_id, pid) {
-                        if render_dirty.request_pty(pane_id) {
+                        if render_dirty.request_pty(&detection_terminal_id) {
                             render_notify.notify_one();
                         }
                     }
@@ -2780,7 +2849,7 @@ impl PaneRuntime {
                         } => {
                             apply_agent_detection_publish_update(
                                 state_events.clone(),
-                                pane_id,
+                                (pane_id, detection_terminal_id.clone()),
                                 agent,
                                 AgentDetectionPublishUpdate {
                                     state: new_state,
@@ -3582,8 +3651,15 @@ mod tests {
         std::fs::create_dir(&cwd).expect("create reported cwd");
 
         let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+        let terminal_id = TerminalId::alloc();
         let (events, _event_rx) = mpsc::channel(1);
-        publish_reported_cwd(runtime.pane_id, cwd.clone(), &runtime.reported_cwd, &events);
+        publish_reported_cwd(
+            runtime.pane_id,
+            &terminal_id,
+            cwd.clone(),
+            &runtime.reported_cwd,
+            &events,
+        );
         assert_eq!(
             runtime.reported_cwd.lock().unwrap().as_ref(),
             Some(&cwd),
@@ -4038,8 +4114,10 @@ mod tests {
         runtime.test_process_pty_bytes("\x1b]2;✳ 修复🙂标题\x1b\\".as_bytes());
         runtime.terminal.clear_agent_osc_state();
         assert_eq!(runtime.agent_osc_title(), "");
-        let pane = runtime.handoff_runtime_state(12);
+        let terminal_id = TerminalId::alloc();
+        let pane = runtime.handoff_runtime_state(terminal_id.clone(), 12);
 
+        assert_eq!(pane.terminal_id, terminal_id);
         assert_eq!(pane.keyboard_protocol_flags, 5);
         assert_eq!(pane.terminal_title.as_deref(), Some("✳ 修复🙂标题"));
         assert_eq!(
@@ -5003,8 +5081,10 @@ mod tests {
     async fn spawned_pty_reader_aggregates_terminal_bells() {
         let (events, mut event_rx) = mpsc::channel(8);
         let pane_id = PaneId::from_raw(42);
+        let terminal_id = TerminalId::alloc();
         let runtime = PaneRuntime::spawn_shell_command(
             pane_id,
+            terminal_id.clone(),
             24,
             80,
             std::env::temp_dir(),
@@ -5024,17 +5104,61 @@ mod tests {
             loop {
                 if let Some(AppEvent::TerminalBell {
                     pane_id: delivered_pane,
+                    terminal_id: delivered_terminal,
                     count,
                 }) = event_rx.recv().await
                 {
-                    break (delivered_pane, count);
+                    break (delivered_pane, delivered_terminal, count);
                 }
             }
         })
         .await
         .expect("PTY reader should publish terminal bells");
 
-        assert_eq!(bell, (pane_id, 2));
+        assert_eq!(bell, (pane_id, terminal_id, 2));
+        runtime.shutdown();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_pty_reader_attributes_clipboard_write_to_exact_terminal() {
+        let (events, mut event_rx) = mpsc::channel(8);
+        let pane_id = PaneId::from_raw(43);
+        let terminal_id = TerminalId::alloc();
+        let runtime = PaneRuntime::spawn_shell_command(
+            pane_id,
+            terminal_id.clone(),
+            24,
+            80,
+            std::env::temp_dir(),
+            "printf '\\033]52;c;Y2xpcGJvYXJk\\007'; sleep 0.05",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+
+        let clipboard = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(AppEvent::ClipboardWrite {
+                    pane_id: delivered_pane,
+                    terminal_id: delivered_terminal,
+                    content,
+                }) = event_rx.recv().await
+                {
+                    break (delivered_pane, delivered_terminal, content);
+                }
+            }
+        })
+        .await
+        .expect("PTY reader should publish clipboard writes");
+
+        assert_eq!(clipboard, (pane_id, terminal_id, b"clipboard".to_vec()));
         runtime.shutdown();
     }
 
@@ -5042,6 +5166,7 @@ mod tests {
     async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
         let (tx, mut rx) = mpsc::channel(1);
         let pane_id = PaneId::from_raw(42);
+        let terminal_id = TerminalId::alloc();
 
         tx.try_send(AppEvent::UpdateReady {
             version: "9.9.9".into(),
@@ -5052,6 +5177,7 @@ mod tests {
         let publish = publish_state_changed_event(
             tx.clone(),
             pane_id,
+            terminal_id.clone(),
             Some(Agent::Pi),
             AgentState::Idle,
             false,
@@ -5090,13 +5216,14 @@ mod tests {
             second,
             AppEvent::StateChanged {
                 pane_id: delivered_pane,
+                terminal_id: delivered_terminal,
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
                 visible_blocker: false,
                 visible_working: false,
                 process_exited: false,
                 observed_at: _,
-            } if delivered_pane == pane_id
+            } if delivered_pane == pane_id && delivered_terminal == terminal_id
         ));
     }
 }

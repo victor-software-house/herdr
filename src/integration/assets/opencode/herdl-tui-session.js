@@ -11,7 +11,7 @@ const ROUTE_POLL_INTERVAL_MS = 100;
 const SELECTION_RETRY_DELAYS_MS = [100, 400, 1_000];
 
 function requestOnce(sessionID, state, seq, isCurrent = () => true) {
-  const paneId = process.env.HERDL_PANE_ID;
+  const paneId = process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID;
   const socketPath = process.env.HERDL_SOCKET_PATH;
   if (!paneId || !socketPath) {
     return Promise.resolve(true);
@@ -71,7 +71,7 @@ export default {
     if (
       process.env.HERDL_ENV !== "1" ||
       !process.env.HERDL_SOCKET_PATH ||
-      !process.env.HERDL_PANE_ID
+      !(process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID)
     ) {
       return;
     }
@@ -128,7 +128,11 @@ export default {
 };
 
 function setup(api) {
-  if (process.env.HERDL_ENV !== "1" || !process.env.HERDL_SOCKET_PATH || !process.env.HERDL_PANE_ID) return;
+  if (
+    process.env.HERDL_ENV !== "1" ||
+    !process.env.HERDL_SOCKET_PATH ||
+    !(process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID)
+  ) return;
 
   let disposed = false;
   let selected;

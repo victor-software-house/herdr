@@ -47,9 +47,9 @@ impl HeadlessServer {
 
         let mut pane_by_terminal = HashMap::new();
         for ws in &self.app.state.workspaces {
-            for tab in &ws.tabs {
-                for (pane_id, pane) in &tab.panes {
-                    pane_by_terminal.insert(pane.attached_terminal_id.clone(), pane_id.raw());
+            for (pane_id, pane) in &ws.panes {
+                for tab in &pane.tabs {
+                    pane_by_terminal.insert(tab.terminal_id.clone(), pane_id.raw());
                 }
             }
         }
@@ -58,7 +58,7 @@ impl HeadlessServer {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "live handoff supports at most {} panes in one update; close panes or restart herdr normally",
+                    "live handoff supports at most {} terminal tabs in one update; close tabs or restart herdl normally",
                     crate::server::handoff::MAX_FDS_PER_HANDOFF
                 ),
             ));
@@ -83,6 +83,7 @@ impl HeadlessServer {
             &self.app.state.workspaces,
             &self.app.state.terminals,
             &self.app.terminal_runtimes,
+            &self.app.state.public_pane_id_aliases,
             self.app.state.active,
             self.app.state.selected,
         );
@@ -92,7 +93,7 @@ impl HeadlessServer {
             let Some(pane_id) = pane_by_terminal.get(terminal_id).copied() else {
                 continue;
             };
-            let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
+            let mut handoff_runtime = runtime.handoff_runtime_state(terminal_id.clone(), pane_id);
             let has_agent_session = self
                 .app
                 .state
@@ -105,13 +106,13 @@ impl HeadlessServer {
             handoff_entries.push((terminal_id.clone(), handoff_runtime));
         }
 
-        let panes = handoff_entries
+        let runtimes = handoff_entries
             .iter()
             .map(|(_, runtime)| runtime.clone())
             .collect();
         let manifest = crate::server::handoff::manifest_for(
             snapshot,
-            panes,
+            runtimes,
             params.expected_protocol,
             params.expected_version,
             self.api_window_title.clone(),

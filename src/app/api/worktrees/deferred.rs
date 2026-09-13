@@ -460,7 +460,7 @@ impl App {
             return;
         };
         self.emit_worktree_created_event(ws_idx, worktree.clone());
-        let tab_idx = self.state.workspaces[ws_idx].active_tab;
+        let tab_idx = self.state.workspaces[ws_idx].active_tab_index();
         let response = encode_success(
             api.id,
             ResponseResult::WorktreeCreated {
@@ -609,7 +609,7 @@ impl App {
         for &pane_id in shutdown_panes {
             let Some((ws_idx, terminal_id)) = self
                 .find_pane(pane_id)
-                .map(|(ws_idx, pane)| (ws_idx, pane.attached_terminal_id.clone()))
+                .map(|(ws_idx, pane)| (ws_idx, pane.active_terminal_id().clone()))
             else {
                 self.pending_worktree_remove_runtime_exits.remove(&pane_id);
                 self.pending_worktree_remove_runtime_restores
@@ -650,7 +650,8 @@ impl App {
                     }
                 } else {
                     pane_updates.extend(self.publish_worktree_runtime_agent_release(pane_id));
-                    if !self.respawn_shell_for_launch_pane(pane_id, false) {
+                    if !self.respawn_shell_for_launch_terminal(pane_id, terminal_id.clone(), false)
+                    {
                         self.pending_worktree_remove_runtime_restores
                             .insert(pane_id, operation_id);
                         self.queue_worktree_runtime_restore_failed(pane_id, operation_id);

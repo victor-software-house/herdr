@@ -38,7 +38,7 @@ events, and subscription events.
 The socket API can:
 
 - create, list, focus, rename, and close workspaces
-- create, list, focus, rename, and close tabs
+- create, list, inspect, focus, rename, reorder, and close pane-owned tabs
 - list, inspect, split, swap, focus, resize, rename, read, close, and send input to panes
 - list, inspect, read, prompt, wait on, rename, focus, start, and attach agents through CLI helpers
 - report custom agent state from hooks and plugins
@@ -102,7 +102,7 @@ Raw socket method names use dot notation:
 | Session | `session.snapshot` |
 | Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
 | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
-| Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
+| Tab | `tab.create`, `tab.create_in_pane`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
 | Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.graphics.info`, `pane.graphics.set`, `pane.graphics.clear`, `pane.graphics.stream`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
 | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
@@ -235,32 +235,19 @@ placement when the pane becomes visible again.
 producer-side canonical-ring efficiency; it still copies or presents the full file.
 Resize and full redraw replay placements without retransmitting pixels.
 
-`pane.layout` returns the tab layout snapshot with `workspace_id`, `tab_id`,
-`zoomed`, outer `area`, `focused_pane_id`, pane rects, and split rects/ratios.
-`pane.neighbor` and `pane.edges` include that same layout snapshot so clients
-can make the next decision without private layout state.
+`pane.layout` returns the workspace's single layout snapshot. `workspace_id` identifies the layout owner; `pane_id` and pane-qualified `tab_id` identify the relevant pane and terminal tab for the request. `focused_pane_id` separately reports the workspace's actual focus. The snapshot also contains `zoomed`, outer `area`, pane rects, and split rects/ratios. `pane.neighbor` and `pane.edges` include the same workspace layout so clients can make the next decision without private layout state.
 
-`pane.process_info` returns the pane's shell pid, foreground process group id
-when available, and foreground processes with pid, name, argv/cmdline, and cwd
-when the platform exposes them.
+`pane.process_info` returns the pane's active terminal shell pid, foreground process group id when available, and foreground processes with pid, name, argv/cmdline, and cwd when the platform exposes them.
 
-`layout.export` returns a portable tab layout tree. Omit `tab_id` and `pane_id`
-to export the active tab, pass `tab_id` to export that tab, or pass `pane_id` to
-export the tab containing that pane.
+`layout.export` returns the workspace's portable layout tree. Omit `tab_id` and `pane_id` to use the active workspace's focused pane and active tab, pass a pane-qualified `tab_id` to identify an exact terminal context, or pass `pane_id` to use that pane's active tab.
 
 ```json
-{"id":"req_export","method":"layout.export","params":{"tab_id":"w1:t1"}}
+{"id":"req_export","method":"layout.export","params":{"tab_id":"w1:p1:t1"}}
 ```
 
-The response includes `workspace_id`, `tab_id`, `zoomed`, `focused_pane_id`, and
-`root`. `root` is a BSP tree of `pane` and `split` nodes. Pane nodes can include
-`pane_id`, `label`, `cwd`, and argv `command`. Split nodes use
-`direction` (`right` or `down`), `ratio`, `first`, and `second`.
+The response includes `workspace_id`, relevant `pane_id` and `tab_id`, `zoomed`, actual `focused_pane_id`, and `root`. `root` is the workspace BSP tree of `pane` and `split` nodes. Pane nodes can include `pane_id`, `label`, `cwd`, and argv `command`. Split nodes use `direction` (`right` or `down`), `ratio`, `first`, and `second`.
 
-`layout.apply` creates a fresh tab from a declarative tree. If `tab_id` is
-provided, Herdr creates the replacement tab first and then closes the old tab.
-This restores structure, labels, cwd, env, and optional argv commands; it does
-not preserve live PTYs, scrollback, or running processes.
+`layout.apply` applies a declarative tree at the relevant pane. If `tab_id` is provided, Herdr creates a replacement terminal tab in that tab's owner pane, closes the old terminal tab, and adds any required split panes to the workspace layout. Without `tab_id`, it uses the selected workspace's focused pane. This restores labels, cwd, env, and optional argv commands; it does not preserve replaced PTYs, scrollback, or running processes.
 
 ```json
 {
@@ -291,18 +278,13 @@ not preserve live PTYs, scrollback, or running processes.
 }
 ```
 
-`layout.set_split_ratio` updates an existing split in a tab layout. The response
-is `type: "layout_split_ratio_set"` with the updated portable `layout`.
+`layout.set_split_ratio` updates an existing split in the workspace layout. The response is `type: "layout_split_ratio_set"` with the updated portable `layout` and the relevant pane/tab context.
 
 ```json
-{"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
+{"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:p1:t1","path":[],"ratio":0.6}}
 ```
 
-Process-launching methods accept an `env` object. Herdr applies those key/value
-pairs to the newly launched process only. Herdr also injects `HERDR_SOCKET_PATH`,
-`HERDR_ENV=1`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID` into
-managed pane processes. Herdr-managed variables are authoritative when they
-conflict with caller-provided env.
+Process-launching methods accept an `env` object. Herdr applies those key/value pairs to the newly launched process only. Herdr also injects `HERDR_SOCKET_PATH`, `HERDR_ENV=1`, `HERDR_WORKSPACE_ID`, pane-qualified `HERDR_TAB_ID`, and `HERDR_PANE_ID` into managed pane processes. Herdr-managed variables are authoritative when they conflict with caller-provided env.
 
 `pane.swap` supports directional and explicit forms:
 
@@ -322,7 +304,7 @@ full-tab layout.
 workspace:
 
 ```json
-{"id":"req_move_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab","tab_id":"w1:t2","target_pane_id":"w1:p3","split":"right","ratio":0.5},"focus":true}}
+{"id":"req_move_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab","tab_id":"w1:p3:t2","target_pane_id":"w1:p3","split":"right","ratio":0.5},"focus":true}}
 {"id":"req_move_new_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_tab","workspace_id":"w1","label":"logs"},"focus":true}}
 {"id":"req_move_new_workspace","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_workspace","label":"logs","tab_label":"main"},"focus":true}}
 ```
@@ -694,14 +676,14 @@ platform-native local socket form.
 
 ## Agent state reporting
 
-Integrations report agent state with `pane.report_agent`.
+Integrations report agent state with `pane.report_agent`. Use the exact pane-qualified tab ID inherited as `HERDR_TAB_ID`:
 
 ```json
 {
   "id": "req_1",
   "method": "pane.report_agent",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "custom:docs",
     "agent": "docs-bot",
     "state": "working",
@@ -720,13 +702,15 @@ Session-only official integrations report native session references with `pane.r
   "id": "req_2",
   "method": "pane.report_agent_session",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "herdr:codex",
     "agent": "codex",
     "agent_session_id": "..."
   }
 }
 ```
+
+The report methods `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, and `pane.release_agent` accept an exact terminal ID or pane-qualified tab ID. A legacy pane ID works only for a one-tab pane. A stacked pane returns `pane_target_ambiguous` with candidate tab IDs instead of choosing its active tab.
 
 `pane.get`, `pane.list`, `agent.get`, and `agent.list` expose a read-only `agent_session` object when Herdr has a stored native session reference:
 
@@ -754,7 +738,7 @@ Use `pane.report_metadata` when a user hook wants to customize presentation with
   "id": "req_2",
   "method": "pane.report_metadata",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "user:claude-title",
     "agent": "claude",
     "title": "Refactor auth middleware",
@@ -814,10 +798,7 @@ Lifecycle subscriptions start when the request is accepted and do not replay
 events retained before that point.
 
 Workspace event subscriptions include `workspace.created`, `workspace.updated`, `workspace.metadata_updated`, `workspace.renamed`, `workspace.moved`, `workspace.reordered`, `workspace.closed`, and `workspace.focused`. `workspace.metadata_updated` reports token changes and TTL expiry without invoking plugin event hooks. Other workspace events describe Herdr UI/runtime lifecycle. `workspace.created` includes optional `workspace.worktree` provenance when the workspace belongs to a worktree group. `workspace.moved` includes the moved `workspace_id`, requested `insert_index`, and updated ordered `workspaces` list. `workspace.reordered` includes the atomically moved `workspace_ids`, optional `before_workspace_id`, and authoritative ordered `workspaces` list. `workspace.closed` includes a final `workspace` snapshot when Herdr can still identify it before removal.
-Tab event subscriptions include `tab.created`, `tab.closed`, `tab.focused`,
-`tab.renamed`, and `tab.moved`. `tab.moved` includes the moved `tab_id`,
-`workspace_id`, requested `insert_index`, and updated ordered `tabs` list for
-that workspace.
+Tab event subscriptions include `tab.created`, `tab.closed`, `tab.focused`, `tab.renamed`, and `tab.moved`. Tab IDs are pane-qualified and `TabInfo.pane_id` identifies the owner. `tab.create` retains the generation-1 focused-pane request shape; `tab.create_in_pane` targets an exact `pane_id` when advertised by a generation-2 endpoint snapshot. Creating a tab in an existing pane emits `tab.created`, not `pane.created`. `tab.moved` includes the moved `tab_id`, `workspace_id`, requested `insert_index`, and the updated ordered `tabs` list for the affected pane stack.
 Pane event subscriptions include `pane.created`, `pane.updated`, `pane.closed`, `pane.focused`,
 `pane.moved`, `pane.exited`, `pane.agent_detected`,
 `pane.output_matched`, `pane.agent_status_changed`, and `pane.scroll_changed`.
@@ -828,10 +809,7 @@ Terminal-title changes can emit `pane.updated`, but spinner-only raw-title chang
 `pane.scroll_changed` is scoped to one `pane_id` and emits `pane_id`,
 `workspace_id`, and the current `scroll` metrics whenever Herdr observes a
 changed scroll snapshot.
-Layout event subscriptions include `layout.updated`. The event carries the
-updated `PaneLayoutSnapshot` for one tab. Clients that bootstrap with
-`session.snapshot` should replace the cached layout with the same
-`workspace_id` and `tab_id`.
+Layout event subscriptions include `layout.updated`. The event carries the updated workspace `PaneLayoutSnapshot`; `pane_id` and `tab_id` identify the relevant terminal context. Clients that bootstrap with `session.snapshot` should keep one cached layout per `workspace_id` and replace it when that workspace emits an update.
 
 Worktree event subscriptions include `worktree.created`, `worktree.opened`, and `worktree.removed`. Worktree events describe Git checkout lifecycle. `worktree.created` includes the opened `workspace` and created `worktree`. `worktree.opened` includes the target `workspace`, opened `worktree`, and `already_open`. `worktree.removed` includes the `workspace_id`, removed `worktree`, and `forced`.
 
@@ -875,7 +853,7 @@ Successful responses look like this:
       "pane_id": "w1:p1",
       "terminal_id": "term_abc123",
       "workspace_id": "w1",
-      "tab_id": "w1:t1",
+      "tab_id": "w1:p1:t1",
       "focused": true,
       "agent_status": "working",
       "revision": 42

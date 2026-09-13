@@ -123,12 +123,12 @@ Targets accept a unique live agent name or the pane ID that currently hosts the 
 Integrations report lifecycle state as semantic state only. Add display customization separately with pane metadata tokens.
 
 ```bash
-herdr pane report-agent w1:p1 \
+herdr pane report-agent w1:p1:t1 \
   --source custom:indexer \
   --agent docs-bot \
   --state working
 
-herdr pane report-metadata w1:p1 \
+herdr pane report-metadata w1:p1:t1 \
   --source custom:indexer-display \
   --token summary=indexing
 ```

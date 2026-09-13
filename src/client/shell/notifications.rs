@@ -372,6 +372,7 @@ mod tests {
         assert_eq!(state.pending_notifications.len(), 1);
 
         snapshot.revision = snapshot.revision.saturating_add(1);
+        snapshot.agents[0].tab_id = "background-tab".into();
         snapshot.agents[0].agent_status = crate::api::schema::AgentStatus::Idle;
         snapshot.agents[0].state_change_seq = 2;
         state.set_snapshot(Box::new(snapshot));

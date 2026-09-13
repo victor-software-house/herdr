@@ -26,7 +26,10 @@ pub(crate) type RenderTarget = (
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientShellInputTarget {
-    Pane(String),
+    Pane {
+        pane_id: String,
+        terminal_id: String,
+    },
     Popup(String),
 }
 
@@ -63,37 +66,52 @@ pub(crate) enum DeferredRender {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ClientShellLocation {
     pub(crate) focused_workspace_id: Option<String>,
+    pub(crate) focused_pane_ids: HashMap<String, String>,
     pub(crate) active_tab_ids: HashMap<String, String>,
 }
 
 pub(crate) struct ClientShellTopology {
     pub(crate) focused_workspace_id: Option<String>,
     pub(crate) fallback_workspace_id: Option<String>,
+    pub(crate) focused_pane_ids: HashMap<String, String>,
+    pub(crate) pane_workspace_ids: HashMap<String, String>,
     pub(crate) active_tab_ids: HashMap<String, String>,
-    pub(crate) tab_workspace_ids: HashMap<String, String>,
+    pub(crate) tab_pane_ids: HashMap<String, String>,
 }
 
 impl ClientShellLocation {
-    pub(crate) fn from_snapshot(snapshot: &crate::protocol::ClientShellSnapshot) -> Self {
+    pub(crate) fn from_snapshot_v2(snapshot: &crate::protocol::ClientShellSnapshotV2) -> Self {
         Self {
             focused_workspace_id: snapshot.focused_workspace_id.clone(),
-            active_tab_ids: snapshot
+            focused_pane_ids: snapshot
                 .workspaces
                 .iter()
                 .map(|workspace| {
                     (
                         workspace.workspace_id.clone(),
-                        workspace.active_tab_id.clone(),
+                        workspace.focused_pane_id.clone(),
                     )
                 })
+                .collect(),
+            active_tab_ids: snapshot
+                .workspaces
+                .iter()
+                .flat_map(|workspace| workspace.panes.iter())
+                .map(|pane| (pane.pane_id.clone(), pane.active_tab_id.clone()))
                 .collect(),
         }
     }
 
-    pub(crate) fn focused_tab_id(&self) -> Option<&str> {
+    pub(crate) fn focused_pane_id(&self) -> Option<&str> {
         self.focused_workspace_id
             .as_deref()
-            .and_then(|workspace_id| self.active_tab_ids.get(workspace_id))
+            .and_then(|workspace_id| self.focused_pane_ids.get(workspace_id))
+            .map(String::as_str)
+    }
+
+    pub(crate) fn focused_tab_id(&self) -> Option<&str> {
+        self.focused_pane_id()
+            .and_then(|pane_id| self.active_tab_ids.get(pane_id))
             .map(String::as_str)
     }
 
@@ -101,25 +119,39 @@ impl ClientShellLocation {
         self.focused_workspace_id = Some(workspace_id);
     }
 
-    pub(crate) fn focus_tab(&mut self, workspace_id: String, tab_id: String) {
+    pub(crate) fn focus_pane(&mut self, workspace_id: String, pane_id: String) {
         self.focused_workspace_id = Some(workspace_id.clone());
-        self.active_tab_ids.insert(workspace_id, tab_id);
+        self.focused_pane_ids.insert(workspace_id, pane_id);
+    }
+
+    pub(crate) fn focus_tab(&mut self, workspace_id: String, pane_id: String, tab_id: String) {
+        self.focus_pane(workspace_id, pane_id.clone());
+        self.active_tab_ids.insert(pane_id, tab_id);
     }
 
     pub(crate) fn reconcile(&mut self, topology: &ClientShellTopology) {
-        self.active_tab_ids.retain(|workspace_id, tab_id| {
-            topology.active_tab_ids.contains_key(workspace_id)
-                && topology.tab_workspace_ids.get(tab_id) == Some(workspace_id)
+        self.focused_pane_ids.retain(|workspace_id, pane_id| {
+            topology.focused_pane_ids.contains_key(workspace_id)
+                && topology.pane_workspace_ids.get(pane_id) == Some(workspace_id)
         });
-        for (workspace_id, tab_id) in &topology.active_tab_ids {
-            self.active_tab_ids
+        for (workspace_id, pane_id) in &topology.focused_pane_ids {
+            self.focused_pane_ids
                 .entry(workspace_id.clone())
+                .or_insert_with(|| pane_id.clone());
+        }
+        self.active_tab_ids.retain(|pane_id, tab_id| {
+            topology.active_tab_ids.contains_key(pane_id)
+                && topology.tab_pane_ids.get(tab_id) == Some(pane_id)
+        });
+        for (pane_id, tab_id) in &topology.active_tab_ids {
+            self.active_tab_ids
+                .entry(pane_id.clone())
                 .or_insert_with(|| tab_id.clone());
         }
         if self
             .focused_workspace_id
             .as_ref()
-            .is_none_or(|workspace_id| !topology.active_tab_ids.contains_key(workspace_id))
+            .is_none_or(|workspace_id| !topology.focused_pane_ids.contains_key(workspace_id))
         {
             self.focused_workspace_id = topology
                 .focused_workspace_id
@@ -175,8 +207,12 @@ pub(crate) struct ClientConnection {
     pub(crate) staged_clipboard_files: Vec<PathBuf>,
     /// Connection-local workspace and tab projection for a client-owned shell.
     pub(crate) shell_location: Option<ClientShellLocation>,
-    /// Last coherent shell replacement sent to this client.
+    /// Named snapshot codec negotiated for this shell connection.
+    pub(crate) shell_snapshot_codec: String,
+    /// Last coherent v1 shell replacement sent to this client.
     pub(crate) shell_snapshot: Option<crate::protocol::ClientShellSnapshot>,
+    /// Last coherent v2 shell replacement sent to this client.
+    pub(crate) shell_snapshot_v2: Option<crate::protocol::ClientShellSnapshotV2>,
     /// Monotonic shell replacement revision for this connection.
     pub(crate) shell_projection_revision: u64,
     /// Whether this shell is waiting for one ordered endpoint command response.
@@ -243,7 +279,9 @@ impl ClientConnection {
             shell_held_inputs: HashMap::new(),
             staged_clipboard_files: Vec::new(),
             shell_location: None,
+            shell_snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
             shell_snapshot: None,
+            shell_snapshot_v2: None,
             shell_projection_revision: 0,
             shell_endpoint_command_in_flight: false,
             shell_endpoint_command_surface_revision: None,
@@ -256,6 +294,14 @@ impl ClientConnection {
 
     pub(crate) fn request_repaint(&mut self) {
         self.render_state.request_repaint();
+    }
+
+    pub(crate) fn invalidate_shell_surface(&mut self) {
+        if let Some(writer) = &self.writer {
+            writer.discard_pending_render();
+        }
+        self.request_repaint();
+        self.shell_graphics_delivery = Default::default();
     }
 
     pub(crate) fn track_shell_input(
@@ -356,6 +402,26 @@ impl ClientConnection {
                 | ClientPaneInputEvent::Paste(_) => {}
             }
         }
+    }
+
+    pub(crate) fn take_shell_release(
+        &mut self,
+        event: &ClientPaneInputEvent,
+    ) -> Option<ClientShellHeldInput> {
+        let id = match event {
+            ClientPaneInputEvent::Key {
+                code,
+                kind: ClientKeyKind::Release,
+                physical_key_id,
+                ..
+            } => client_shell_key_press_id(code, *physical_key_id),
+            ClientPaneInputEvent::Mouse {
+                kind: ClientMouseKind::Up(button),
+                ..
+            } => ClientShellPressId::Mouse(*button),
+            _ => return None,
+        };
+        self.shell_held_inputs.remove(&id)
     }
 
     pub(crate) fn drain_shell_held_inputs(&mut self) -> Vec<ClientShellHeldInput> {
@@ -538,7 +604,10 @@ mod tests {
     fn semantic_text_press_does_not_create_a_server_release_lease() {
         let mut client = shell_client();
         client.track_shell_input(
-            ClientShellInputTarget::Pane("w1:p1".into()),
+            ClientShellInputTarget::Pane {
+                pane_id: "w1:p1".into(),
+                terminal_id: "terminal-1".into(),
+            },
             &[ClientPaneInputEvent::Key {
                 code: crate::protocol::ClientKeyCode::Char('x'),
                 modifiers: 0,
@@ -578,7 +647,10 @@ mod tests {
             windows_record: (physical_key_id == 108).then_some(windows_record),
         };
         client.track_shell_input(
-            ClientShellInputTarget::Pane("w1:p1".into()),
+            ClientShellInputTarget::Pane {
+                pane_id: "w1:p1".into(),
+                terminal_id: "terminal-1".into(),
+            },
             &[
                 key(ClientKeyKind::Press, 13),
                 key(ClientKeyKind::Press, 108),

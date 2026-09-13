@@ -237,7 +237,7 @@ mod tests {
             crate::api::EventHub::default(),
         );
         let ws = Workspace::test_new("test");
-        let pane_id = ws.tabs[0].root_pane;
+        let pane_id = ws.root_pane;
         app.state.workspaces.push(ws);
         app.state.active = Some(0);
         app.state.view.pane_infos.push(crate::layout::PaneInfo {

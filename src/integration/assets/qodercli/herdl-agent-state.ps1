@@ -2,13 +2,14 @@
 # managed by herdl; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDL_INTEGRATION_ID=qodercli
-# HERDL_INTEGRATION_VERSION=3
+# HERDL_INTEGRATION_VERSION=4
 
 param([string]$Action = "")
 
 if ($Action -ne "session") { exit 0 }
 if ($env:HERDL_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDL_PANE_ID)) { exit 0 }
+$targetId = if (![string]::IsNullOrWhiteSpace($env:HERDL_TAB_ID)) { $env:HERDL_TAB_ID } else { $env:HERDL_PANE_ID }
+if ([string]::IsNullOrWhiteSpace($targetId)) { exit 0 }
 
 $inputText = [Console]::In.ReadToEnd()
 try {
@@ -22,6 +23,6 @@ if ($null -eq $payload -or [string]::IsNullOrWhiteSpace($payload.session_id)) { 
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $herdl = if ([string]::IsNullOrWhiteSpace($env:HERDL_BIN_PATH)) { "herdl" } else { $env:HERDL_BIN_PATH }
 try {
-    & $herdl pane report-agent-session $env:HERDL_PANE_ID --source herdl:qodercli --agent qodercli --agent-session-id $payload.session_id --seq $seq 2>$null | Out-Null
+    & $herdl pane report-agent-session $targetId --source herdl:qodercli --agent qodercli --agent-session-id $payload.session_id --seq $seq 2>$null | Out-Null
 } catch {
 }

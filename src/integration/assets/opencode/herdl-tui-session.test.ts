@@ -54,6 +54,7 @@ beforeEach(() => {
   process.env.HERDL_ENV = "1";
   process.env.HERDL_SOCKET_PATH = "test.sock";
   process.env.HERDL_PANE_ID = "test:p1";
+  process.env.HERDL_TAB_ID = "test:p1:t2";
 });
 
 afterEach(() => {

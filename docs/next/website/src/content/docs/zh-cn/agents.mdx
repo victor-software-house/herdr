@@ -123,12 +123,12 @@ herdr agent rename reviewer --clear
 集成只把生命周期状态作为语义状态上报。展示自定义应通过窗格元数据令牌单独添加。
 
 ```bash
-herdr pane report-agent w1:p1 \
+herdr pane report-agent w1:p1:t1 \
   --source custom:indexer \
   --agent docs-bot \
   --state working
 
-herdr pane report-metadata w1:p1 \
+herdr pane report-metadata w1:p1:t1 \
   --source custom:indexer-display \
   --token summary=indexing
 ```

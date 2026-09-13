@@ -50,9 +50,7 @@ use crate::protocol::{
 use crate::server::client_accept::{
     accept_pending_client_connections, reject_pending_client_connections,
 };
-use crate::server::client_shell::{
-    render_pane_surface as render_client_shell_pane_surface, snapshot as client_shell_snapshot,
-};
+use crate::server::client_shell::render_pane_surface as render_client_shell_pane_surface;
 use crate::server::client_transport::ServerEvent;
 use crate::server::clients::{
     latest_shell_client, render_targets, terminal_stream_client_ids, ClientConnection,
@@ -1048,19 +1046,19 @@ impl HeadlessServer {
     ) {
         for held in held_inputs {
             let result = match held.target {
-                ClientShellInputTarget::Pane(pane_id) => {
-                    let Some((workspace_index, runtime_pane_id)) = self.app.parse_pane_id(&pane_id)
+                ClientShellInputTarget::Pane {
+                    pane_id,
+                    terminal_id,
+                } => {
+                    let Some(runtime) = self.runtime_for_shell_input_target(&pane_id, &terminal_id)
                     else {
                         continue;
                     };
-                    let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
-                        &self.app.terminal_runtimes,
-                        workspace_index,
-                        runtime_pane_id,
-                    ) else {
-                        continue;
-                    };
-                    apply_client_pane_input_events(runtime, &[held.release])
+                    let result = apply_client_pane_input_events(runtime, &[held.release]);
+                    if let Err(err) = &result {
+                        warn!(client_id, pane_id, terminal_id, err = %err, "client shell exact-terminal release failed");
+                    }
+                    result
                 }
                 ClientShellInputTarget::Popup(terminal_id) => {
                     let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) else {
@@ -1075,6 +1073,59 @@ impl HeadlessServer {
         }
     }
 
+    fn runtime_for_shell_input_target(
+        &self,
+        pane_id: &str,
+        terminal_id: &str,
+    ) -> Option<&crate::terminal::TerminalRuntime> {
+        #[cfg(not(test))]
+        let _ = pane_id;
+        if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
+            return Some(runtime);
+        }
+        #[cfg(test)]
+        {
+            let (workspace_index, runtime_pane_id) = self.app.parse_pane_id(pane_id)?;
+            let workspace = self.app.state.workspaces.get(workspace_index)?;
+            if workspace
+                .pane_state(runtime_pane_id)?
+                .active_terminal_id()
+                .as_str()
+                != terminal_id
+            {
+                return None;
+            }
+            workspace.test_runtimes.get(&runtime_pane_id)
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
+    }
+
+    fn reroute_client_shell_releases(
+        &mut self,
+        client_id: u64,
+        current_target: &ClientShellInputTarget,
+        events: Vec<protocol::ClientPaneInputEvent>,
+    ) -> Vec<protocol::ClientPaneInputEvent> {
+        let mut current_events = Vec::with_capacity(events.len());
+        let mut rerouted = Vec::new();
+        for event in events {
+            let held = self
+                .clients
+                .get_mut(&client_id)
+                .and_then(|client| client.take_shell_release(&event));
+            if let Some(held) = held.filter(|held| held.target != *current_target) {
+                rerouted.push(held);
+            } else {
+                current_events.push(event);
+            }
+        }
+        self.release_client_shell_inputs(client_id, rerouted);
+        current_events
+    }
+
     fn remove_client_and_resize_if_needed(&mut self, client_id: u64) {
         let restore_shell_controller = self.clients.get(&client_id).and_then(|client| {
             let ClientConnectionMode::TerminalAttach { terminal_id } = &client.mode else {
@@ -1083,8 +1134,8 @@ impl HeadlessServer {
             self.shell_geometry_controller_for_terminal(terminal_id)
         });
         self.remove_client(client_id);
-        if let Some((controller_id, target)) = restore_shell_controller {
-            self.restore_shell_tab_geometry(controller_id, target);
+        if let Some((controller_id, target, terminal_id)) = restore_shell_controller {
+            self.restore_shell_tab_geometry(controller_id, target, terminal_id);
         } else {
             self.resize_tabs_for_only_shell_client(true);
         }
@@ -1271,11 +1322,9 @@ impl HeadlessServer {
                 }
                 let foreground_changed = self.promote_client_to_foreground(client_id);
                 let geometry_changed = self.claim_shell_tab_geometry(client_id, false);
-                let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
-                    &self.app.terminal_runtimes,
-                    workspace_index,
-                    runtime_pane_id,
-                ) else {
+                let Some(runtime) =
+                    self.shell_runtime_for_client_pane(client_id, workspace_index, runtime_pane_id)
+                else {
                     return foreground_changed | geometry_changed;
                 };
                 if let Err(err) = apply_client_pane_input_events(
@@ -1480,15 +1529,19 @@ impl HeadlessServer {
     /// tokens require a UI render.
     fn sync_terminal_title_sources(
         &mut self,
-        sources: &HashSet<crate::layout::PaneId>,
+        sources: &HashSet<crate::terminal::TerminalId>,
     ) -> (bool, bool) {
         let focused_source = self
             .app
             .state
             .active
             .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-            .and_then(|workspace| workspace.focused_pane_id())
-            .is_some_and(|pane_id| sources.contains(&pane_id));
+            .and_then(|workspace| {
+                workspace
+                    .focused_pane_id()
+                    .and_then(|pane_id| workspace.terminal_id(pane_id))
+            })
+            .is_some_and(|terminal_id| sources.contains(terminal_id));
         let changes = self.app.sync_terminal_titles(sources);
         let outer_title_synced = focused_source && self.app.window_title_uses_terminal_title();
         if outer_title_synced {
@@ -1946,6 +1999,7 @@ impl HeadlessServer {
                 endpoint_keybindings,
                 mouse_capture,
                 surface_active,
+                snapshot_codec,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1991,31 +2045,51 @@ impl HeadlessServer {
                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
                 connection.shell_mouse_capture = mouse_capture;
                 connection.shell_surface_active = surface_active;
+                connection.shell_snapshot_codec = snapshot_codec.clone();
                 connection.shell_projection_revision = 1;
                 let config_diagnostic = if endpoint_keybindings {
                     self.server_config_diagnostic.as_deref()
                 } else {
                     self.server_config_diagnostic_without_keybindings.as_deref()
                 };
-                let seed_snapshot = client_shell_snapshot(
+                let seed_snapshot_v2 = crate::server::client_shell::snapshot_v2(
                     &self.app,
                     &self.client_shell_boot_id,
                     connection.shell_projection_revision,
                     config_diagnostic,
                     None,
                 );
-                let location =
-                    crate::server::clients::ClientShellLocation::from_snapshot(&seed_snapshot);
-                let snapshot_message =
-                    match crate::protocol::endpoint::snapshot_message(&seed_snapshot) {
+                let location = crate::server::clients::ClientShellLocation::from_snapshot_v2(
+                    &seed_snapshot_v2,
+                );
+                let snapshot_message = if snapshot_codec
+                    == crate::protocol::endpoint::SNAPSHOT_CODEC_V2
+                {
+                    match crate::protocol::endpoint::snapshot_message_v2(&seed_snapshot_v2) {
                         Ok(message) => message,
                         Err(err) => {
                             warn!(client_id, err = %err, "failed to encode endpoint snapshot");
                             return false;
                         }
-                    };
+                    }
+                } else {
+                    let seed_snapshot =
+                        crate::server::client_shell::snapshot_v1_from_v2(seed_snapshot_v2.clone());
+                    let message =
+                        match crate::protocol::endpoint::snapshot_message_v1(&seed_snapshot) {
+                            Ok(message) => message,
+                            Err(err) => {
+                                warn!(client_id, err = %err, "failed to encode endpoint snapshot");
+                                return false;
+                            }
+                        };
+                    connection.shell_snapshot = Some(seed_snapshot);
+                    message
+                };
                 connection.shell_location = Some(location);
-                connection.shell_snapshot = Some(seed_snapshot);
+                if snapshot_codec == crate::protocol::endpoint::SNAPSHOT_CODEC_V2 {
+                    connection.shell_snapshot_v2 = Some(seed_snapshot_v2);
+                }
                 self.clients.insert(client_id, connection);
                 if self.app.state.popup_pane.is_some() && self.popup_owner_tab_id.is_none() {
                     self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
@@ -2374,11 +2448,16 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
-                    &self.app.terminal_runtimes,
+                let Some(terminal_id) = self.shell_terminal_id_for_client_pane(
+                    client_id,
                     workspace_index,
                     runtime_pane_id,
                 ) else {
+                    return false;
+                };
+                let Some(runtime) =
+                    self.shell_runtime_for_client_pane(client_id, workspace_index, runtime_pane_id)
+                else {
                     return false;
                 };
                 super::pane_input::downgrade_ineligible_pixel_mouse(
@@ -2387,18 +2466,16 @@ impl HeadlessServer {
                     runtime.current_size(),
                     runtime.pixel_size(),
                 );
+                let current_target = ClientShellInputTarget::Pane {
+                    pane_id: pane_id.clone(),
+                    terminal_id: terminal_id.to_string(),
+                };
+                let events = self.reroute_client_shell_releases(client_id, &current_target, events);
                 let popup_blocks_input = self.app.state.popup_pane.is_some()
                     && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
                 if popup_blocks_input
                     || !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id)
                 {
-                    let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
-                        &self.app.terminal_runtimes,
-                        workspace_index,
-                        runtime_pane_id,
-                    ) else {
-                        return false;
-                    };
                     let releases = events
                         .into_iter()
                         .filter(client_pane_input_releases_press)
@@ -2407,11 +2484,13 @@ impl HeadlessServer {
                         return false;
                     }
                     if let Some(client) = self.clients.get_mut(&client_id) {
-                        client.track_shell_input(
-                            ClientShellInputTarget::Pane(pane_id.clone()),
-                            &releases,
-                        );
+                        client.track_shell_input(current_target, &releases);
                     }
+                    let Some(runtime) =
+                        self.runtime_for_shell_input_target(&pane_id, &terminal_id.to_string())
+                    else {
+                        return false;
+                    };
                     let scroll_before = runtime.scroll_metrics();
                     if let Err(err) = apply_client_pane_input_events(runtime, &releases) {
                         warn!(client_id, pane_id, err = %err, "targeted client shell release failed");
@@ -2420,18 +2499,15 @@ impl HeadlessServer {
                 }
                 let interaction = client_pane_input_has_interaction(&events);
                 if let Some(client) = self.clients.get_mut(&client_id) {
-                    client
-                        .track_shell_input(ClientShellInputTarget::Pane(pane_id.clone()), &events);
+                    client.track_shell_input(current_target, &events);
                 }
                 let foreground_changed =
                     interaction && self.promote_client_to_foreground(client_id);
                 let geometry_changed =
                     interaction && self.claim_shell_tab_geometry(client_id, false);
-                let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
-                    &self.app.terminal_runtimes,
-                    workspace_index,
-                    runtime_pane_id,
-                ) else {
+                let Some(runtime) =
+                    self.shell_runtime_for_client_pane(client_id, workspace_index, runtime_pane_id)
+                else {
                     return foreground_changed | geometry_changed;
                 };
                 let scroll_before = runtime.scroll_metrics();
@@ -3014,16 +3090,14 @@ impl HeadlessServer {
                 .iter()
                 .enumerate()
                 .flat_map(|(ws_idx, ws)| {
-                    ws.tabs.iter().flat_map(move |tab| {
-                        tab.panes.iter().filter_map(move |(&pane_id, pane)| {
-                            terminals.get(&pane.attached_terminal_id).map(|terminal| {
-                                (
-                                    ws_idx,
-                                    pane_id,
-                                    terminal.state,
-                                    terminal.effective_agent_label().map(str::to_string),
-                                )
-                            })
+                    ws.panes.iter().filter_map(move |(&pane_id, pane)| {
+                        terminals.get(pane.active_terminal_id()).map(|terminal| {
+                            (
+                                ws_idx,
+                                pane_id,
+                                terminal.state,
+                                terminal.effective_agent_label().map(str::to_string),
+                            )
                         })
                     })
                 })
@@ -3166,12 +3240,12 @@ impl HeadlessServer {
                 .state
                 .workspaces
                 .get(*ws_idx)
-                .and_then(|ws| ws.tabs.iter().find_map(|tab| tab.panes.get(pane_id)));
+                .and_then(|ws| ws.panes.get(pane_id));
 
             let Some(pane_after) = pane_after else {
                 continue;
             };
-            let terminal_id = pane_after.attached_terminal_id.clone();
+            let terminal_id = pane_after.active_terminal_id().clone();
 
             let Some(terminal_after) = self.app.state.terminals.get(&terminal_id) else {
                 continue;
@@ -3182,7 +3256,10 @@ impl HeadlessServer {
                 continue;
             }
 
-            let is_active_tab = self.app.state.pane_is_in_active_tab(*ws_idx, *pane_id);
+            let is_active_tab =
+                self.app
+                    .state
+                    .terminal_is_in_active_tab(*ws_idx, *pane_id, &terminal_id);
             let suppress_active_tab_notifications =
                 self.active_tab_suppresses_notifications(is_active_tab);
 
@@ -3200,6 +3277,7 @@ impl HeadlessServer {
             self.forward_semantic_agent_transition(
                 *ws_idx,
                 *pane_id,
+                &terminal_id,
                 *prev_state,
                 new_state,
                 prev_agent_label.as_deref(),
@@ -3241,6 +3319,7 @@ impl HeadlessServer {
                             &workspace_label,
                             *ws_idx,
                             *pane_id,
+                            &terminal_id,
                         );
                         self.send_notify_to_foreground_client(
                             toast_notify_kind(self.app.state.toast_config.delivery)

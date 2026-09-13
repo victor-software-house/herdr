@@ -49,10 +49,11 @@ class HermesIntegrationAssetTests(unittest.TestCase):
 
         self.assertEqual(calls, [("root-1", "startup"), ("root-2", "new")])
 
-    def test_send_session_uses_cli_with_the_active_pane(self):
+    def test_send_session_prefers_the_active_tab(self):
         module = load_asset()
         environment = {
             "HERDL_ENV": "1",
+            "HERDL_TAB_ID": "w1:p2:t3",
             "HERDL_PANE_ID": "w1:p2",
             "HERDL_BIN_PATH": "C:/bin/herdl.exe",
         }
@@ -63,7 +64,7 @@ class HermesIntegrationAssetTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(
             command[:4],
-            ["C:/bin/herdl.exe", "pane", "report-agent-session", "w1:p2"],
+            ["C:/bin/herdl.exe", "pane", "report-agent-session", "w1:p2:t3"],
         )
         self.assertIn("session-1", command)
         self.assertIn("resume", command)
@@ -73,6 +74,22 @@ class HermesIntegrationAssetTests(unittest.TestCase):
                 run.call_args.kwargs["creationflags"],
                 module.subprocess.CREATE_NO_WINDOW,
             )
+
+    def test_send_session_falls_back_to_the_legacy_pane(self):
+        module = load_asset()
+        environment = {
+            "HERDL_ENV": "1",
+            "HERDL_PANE_ID": "w1:p2",
+            "HERDL_BIN_PATH": "C:/bin/herdl.exe",
+        }
+        with mock.patch.dict(module.os.environ, environment, clear=True):
+            with mock.patch.object(module.subprocess, "run") as run:
+                module._send_session("session-1", "resume")
+
+        self.assertEqual(
+            run.call_args.args[0][:4],
+            ["C:/bin/herdl.exe", "pane", "report-agent-session", "w1:p2"],
+        )
 
     def test_first_turn_recovers_resumed_session_identity(self):
         module = load_asset()

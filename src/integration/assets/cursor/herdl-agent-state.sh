@@ -1,12 +1,12 @@
 #!/bin/sh
 # managed by herdl; reinstalling the integration replaces this file.
 # HERDL_INTEGRATION_ID=cursor
-# HERDL_INTEGRATION_VERSION=1
+# HERDL_INTEGRATION_VERSION=2
 
 [ "${1:-}" = "session" ] || exit 0
 [ "${HERDL_ENV:-}" = "1" ] || exit 0
 [ -n "${HERDL_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDL_PANE_ID:-}" ] || exit 0
+[ -n "${HERDL_TAB_ID:-${HERDL_PANE_ID:-}}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 python3 -c '
@@ -41,7 +41,7 @@ request = json.dumps({
     "id": f"herdl:cursor:{seq}",
     "method": "pane.report_agent_session",
     "params": {
-        "pane_id": os.environ["HERDL_PANE_ID"],
+        "pane_id": os.environ.get("HERDL_TAB_ID") or os.environ["HERDL_PANE_ID"],
         "source": "herdl:cursor",
         "agent": "cursor",
         "seq": seq,

@@ -164,7 +164,7 @@ impl App {
             self.emit_workspace_open_events(ws_idx);
         }
 
-        let tab_idx = self.state.workspaces[ws_idx].active_tab;
+        let tab_idx = self.state.workspaces[ws_idx].active_tab_index();
         let worktree = self.worktree_info_for_entry(&source, entry);
         self.emit_worktree_opened_event(ws_idx, worktree.clone(), already_open.is_some());
         encode_success(
@@ -2249,7 +2249,7 @@ mod tests {
             is_linked_worktree: true,
         });
         let workspace_id = workspace.id.clone();
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
         let foreground = Workspace::test_new("foreground");
         let foreground_id = foreground.id.clone();
@@ -2268,6 +2268,7 @@ mod tests {
         app.state.toast_config.delay_seconds = 1;
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id,
+            terminal_id: terminal_id.clone(),
             agent: Some(crate::detect::Agent::Codex),
             state: crate::detect::AgentState::Blocked,
             visible_blocker: true,
@@ -2275,7 +2276,10 @@ mod tests {
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
-        assert!(app.state.pending_agent_notifications.contains_key(&pane_id));
+        assert!(app
+            .state
+            .pending_agent_notifications
+            .contains_key(&terminal_id));
         let (runtime, _input_rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
         app.terminal_runtimes.insert(terminal_id.clone(), runtime);
 
@@ -2321,6 +2325,7 @@ mod tests {
 
         let pane_updates = app.handle_internal_event_with_pane_updates(AppEvent::PaneDied {
             pane_id,
+            terminal_id: terminal_id.clone(),
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
         assert!(matches!(
@@ -2362,7 +2367,7 @@ mod tests {
         child.worktree_space = Some(membership.clone());
         let foreground = Workspace::test_new("foreground");
         let child_id = child.id.clone();
-        let child_pane_id = child.tabs[0].root_pane;
+        let child_pane_id = child.root_pane;
         let foreground_id = foreground.id.clone();
         app.state.workspaces = vec![parent, child, foreground];
         app.state.active = Some(2);
@@ -2426,7 +2431,7 @@ mod tests {
             is_linked_worktree: true,
         });
         let child_id = child.id.clone();
-        let child_pane_id = child.tabs[0].root_pane;
+        let child_pane_id = child.root_pane;
         let child_terminal_id = child.terminal_id(child_pane_id).cloned().unwrap();
         app.state.workspaces.push(child);
         app.state.ensure_test_terminals();

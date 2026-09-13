@@ -126,20 +126,20 @@ fn take_startup_cwd() -> Option<PathBuf> {
 fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> {
     let loaded_config = config::Config::load();
     let mut received = crate::server::handoff::receive(socket_path, token)?;
-    crate::server::handoff::log_import_result(received.manifest.panes.len());
+    crate::server::handoff::log_import_result(received.manifest.runtimes.len());
 
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
     let should_quit = Arc::new(AtomicBool::new(false));
 
     let mut imports = HashMap::new();
-    for (pane, fd) in received.manifest.panes.into_iter().zip(received.fds) {
-        let pane_id = pane.pane_id;
+    for (runtime, fd) in received.manifest.runtimes.into_iter().zip(received.fds) {
+        let terminal_id = runtime.terminal_id.clone();
         imports.insert(
-            pane_id,
+            terminal_id,
             crate::handoff_runtime::ImportedHandoffRuntime {
                 master_fd: fd,
-                state: pane,
+                state: runtime,
             },
         );
     }

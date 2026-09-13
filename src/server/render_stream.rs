@@ -392,19 +392,27 @@ pub(crate) fn render_tab_surface_virtual(
     area: Rect,
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
+    terminal_overrides: Option<
+        &std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    >,
+    focused_pane_override: Option<crate::layout::PaneId>,
 ) -> RenderedTabSurface {
-    let layout = crate::ui::compute_tab_surface_for(
+    let layout = crate::ui::compute_tab_surface_for_with_overrides(
         app_state,
         terminal_runtimes,
         target,
         area,
         resize_panes,
         cell_size,
+        terminal_overrides,
+        focused_pane_override,
+        None,
     );
     let surface = crate::ui::TabSurfaceView {
         target: layout.target,
         pane_infos: &layout.pane_infos,
         split_borders: &layout.split_borders,
+        terminal_overrides,
     };
     let cursor = crate::ui::tab_surface_cursor(app_state, terminal_runtimes, surface);
     let hyperlinks = crate::ui::tab_surface_hyperlinks(app_state, terminal_runtimes, surface);

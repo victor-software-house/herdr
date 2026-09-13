@@ -288,6 +288,14 @@ impl ClientShellState {
         self.set_endpoint_methods_for(&endpoint_id, methods);
     }
 
+    pub(super) fn endpoint_advertises_method(&self, method: &crate::api::schema::Method) -> bool {
+        self.endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
+            .and_then(|endpoint| endpoint.methods.as_ref())
+            .is_some_and(|methods| methods.contains(crate::api::api_method_name(method)))
+    }
+
     pub(super) fn supports_endpoint_method(&self, method: &crate::api::schema::Method) -> bool {
         self.endpoints
             .iter()
@@ -402,20 +410,15 @@ impl ClientShellState {
                     snapshot
                         .agents
                         .iter()
-                        .find(|previous| previous.pane_id == agent.pane_id)
+                        .find(|previous| previous.tab_id == agent.tab_id)
                 })
                 .is_none_or(|previous| previous.state_change_seq != agent.state_change_seq);
             if changed {
                 next_recency = next_recency.saturating_add(1);
-                recency.insert(agent.pane_id.clone(), next_recency);
+                recency.insert(agent.tab_id.clone(), next_recency);
             }
         }
-        recency.retain(|pane_id, _| {
-            snapshot
-                .agents
-                .iter()
-                .any(|agent| &agent.pane_id == pane_id)
-        });
+        recency.retain(|tab_id, _| snapshot.agents.iter().any(|agent| &agent.tab_id == tab_id));
         let endpoint = &mut self.endpoints[index];
         endpoint.agent_recency = recency;
         endpoint.snapshot_generation = generation;

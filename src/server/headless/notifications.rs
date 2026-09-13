@@ -1,35 +1,55 @@
 use super::*;
 
 impl HeadlessServer {
+    fn terminal_effective_state(
+        &self,
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> crate::detect::AgentState {
+        self.app
+            .state
+            .terminals
+            .get(terminal_id)
+            .map(|terminal| terminal.state)
+            .unwrap_or(crate::detect::AgentState::Unknown)
+    }
+
+    fn terminal_effective_agent_label(
+        &self,
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> Option<String> {
+        self.app
+            .state
+            .terminals
+            .get(terminal_id)
+            .and_then(|terminal| terminal.effective_agent_label())
+            .map(str::to_string)
+    }
+
     fn pane_effective_state(&self, pane_id: crate::layout::PaneId) -> crate::detect::AgentState {
         self.app
             .state
             .workspaces
             .iter()
             .find_map(|ws| {
-                ws.tabs.iter().find_map(|tab| {
-                    let pane = tab.panes.get(&pane_id)?;
-                    self.app
-                        .state
-                        .terminals
-                        .get(&pane.attached_terminal_id)
-                        .map(|terminal| terminal.state)
-                })
+                let pane = ws.panes.get(&pane_id)?;
+                self.app
+                    .state
+                    .terminals
+                    .get(pane.active_terminal_id())
+                    .map(|terminal| terminal.state)
             })
             .unwrap_or(crate::detect::AgentState::Unknown)
     }
 
     fn pane_effective_agent_label(&self, pane_id: crate::layout::PaneId) -> Option<String> {
         self.app.state.workspaces.iter().find_map(|ws| {
-            ws.tabs.iter().find_map(|tab| {
-                let pane = tab.panes.get(&pane_id)?;
-                self.app
-                    .state
-                    .terminals
-                    .get(&pane.attached_terminal_id)
-                    .and_then(|terminal| terminal.effective_agent_label())
-                    .map(str::to_string)
-            })
+            let pane = ws.panes.get(&pane_id)?;
+            self.app
+                .state
+                .terminals
+                .get(pane.active_terminal_id())
+                .and_then(|terminal| terminal.effective_agent_label())
+                .map(str::to_string)
         })
     }
 
@@ -43,6 +63,7 @@ impl HeadlessServer {
         self.forward_semantic_agent_transition(
             update.ws_idx,
             update.pane_id,
+            &update.terminal_id,
             update.previous_state,
             update.state,
             update.previous_agent_label.as_deref(),
@@ -55,6 +76,7 @@ impl HeadlessServer {
         &mut self,
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
+        terminal_id: &crate::terminal::TerminalId,
         previous_state: crate::detect::AgentState,
         state: crate::detect::AgentState,
         previous_agent_label: Option<&str>,
@@ -106,8 +128,13 @@ impl HeadlessServer {
         let tab_id = crate::workspace::public_tab_id_for_number(&workspace_id, tab_number);
         let workspace_label =
             workspace.display_name_from(&self.app.state.terminals, &self.app.terminal_runtimes);
-        let context =
-            crate::app::actions::notification_context(workspace, &workspace_label, ws_idx, pane_id);
+        let context = crate::app::actions::notification_context(
+            workspace,
+            &workspace_label,
+            ws_idx,
+            pane_id,
+            terminal_id,
+        );
         let agent = known_agent
             .map(crate::detect::agent_label)
             .map(str::to_owned);
@@ -134,10 +161,11 @@ impl HeadlessServer {
             return;
         }
 
-        let is_active_tab = self
-            .app
-            .state
-            .pane_is_in_active_tab(update.ws_idx, update.pane_id);
+        let is_active_tab = self.app.state.terminal_is_in_active_tab(
+            update.ws_idx,
+            update.pane_id,
+            &update.terminal_id,
+        );
         let suppress_active_tab_notifications =
             self.active_tab_suppresses_notifications(is_active_tab);
 
@@ -186,6 +214,7 @@ impl HeadlessServer {
             &workspace_label,
             update.ws_idx,
             update.pane_id,
+            &update.terminal_id,
         );
         self.send_notify_to_foreground_client(
             toast_notify_kind(self.app.state.toast_config.delivery)
@@ -335,33 +364,54 @@ impl HeadlessServer {
             None
         };
         match &ev {
-            AppEvent::TerminalBell { pane_id, count } => {
+            AppEvent::TerminalBell {
+                pane_id,
+                terminal_id,
+                count,
+            } => {
                 if !self.send_to_foreground_client(ServerMessage::TerminalBell { count: *count }) {
                     debug!(
                         pane = pane_id.raw(),
+                        terminal = %terminal_id,
                         count, "dropped terminal bell without a foreground client"
                     );
                 }
                 false
             }
-            AppEvent::ClipboardWrite { content } => {
+            AppEvent::ClipboardWrite {
+                pane_id,
+                terminal_id,
+                content,
+            } => {
+                let _ = (pane_id, terminal_id);
                 // Clipboard writes are client-local side effects. Forward them only to
                 // the foreground client instead of broadcasting to every attached client.
                 let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
                 self.send_to_foreground_client(ServerMessage::Clipboard { data });
                 false
             }
-            AppEvent::StateChanged { pane_id, agent, .. } => {
+            AppEvent::StateChanged {
+                pane_id,
+                terminal_id,
+                agent,
+                ..
+            } => {
                 // Capture toast before handling.
                 let toast_before = self.app.state.toast.clone();
-                let pane_id_val = *pane_id;
+                let terminal_id_val = terminal_id.clone();
+                let pane_id_val = self
+                    .app
+                    .state
+                    .terminal_location(&terminal_id_val)
+                    .map(|location| location.pane_id)
+                    .unwrap_or(*pane_id);
                 let agent_val = *agent;
 
                 // Find the previous effective state of this pane before the event
                 // is processed. Notifications must follow effective state changes,
                 // not raw fallback reports that may be masked by hook authority.
-                let prev_state = self.pane_effective_state(pane_id_val);
-                let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
+                let prev_state = self.terminal_effective_state(&terminal_id_val);
+                let prev_agent_label = self.terminal_effective_agent_label(&terminal_id_val);
 
                 // Handle the state change (updates pane state, sets toast on AppState).
                 // Headless mode disables local sound playback separately from the
@@ -392,8 +442,8 @@ impl HeadlessServer {
                 let suppress_active_tab_notifications =
                     self.active_tab_suppresses_notifications(is_active_tab);
 
-                let next_state = self.pane_effective_state(pane_id_val);
-                let next_agent_label = self.pane_effective_agent_label(pane_id_val);
+                let next_state = self.terminal_effective_state(&terminal_id_val);
+                let next_agent_label = self.terminal_effective_agent_label(&terminal_id_val);
 
                 if !suppress_completion
                     && self.app.state.toast_config.delay_seconds == 0
@@ -639,7 +689,7 @@ impl HeadlessServer {
                             .iter()
                             .filter_map(|pane_id| {
                                 self.app.find_pane(*pane_id).map(|(_, pane)| {
-                                    (*pane_id, pane.attached_terminal_id.to_string())
+                                    (*pane_id, pane.active_terminal_id().to_string())
                                 })
                             })
                             .collect::<Vec<_>>()
@@ -663,34 +713,59 @@ impl HeadlessServer {
                 }
                 true
             }
-            AppEvent::PaneDied { pane_id, .. }
-            | AppEvent::WorktreeRuntimeRestoreFailed { pane_id, .. } => {
+            AppEvent::PaneDied {
+                pane_id,
+                terminal_id,
+                ..
+            } => {
                 let focus_before = self.shell_focus_targets();
                 let focused_tabs_before = self.focused_shell_tabs();
                 let pane_id_val = *pane_id;
-                let terminal_id = self.app.state.workspaces.iter().find_map(|ws| {
-                    ws.tabs.iter().find_map(|tab| {
-                        tab.panes
-                            .get(pane_id)
-                            .map(|pane| pane.attached_terminal_id.to_string())
-                    })
-                });
-                if matches!(&ev, AppEvent::PaneDied { .. })
-                    && !self
-                        .app
-                        .pending_worktree_remove_runtime_exits
-                        .contains_key(&pane_id_val)
+                let terminal_id_val = terminal_id.clone();
+                if !self
+                    .app
+                    .pending_worktree_remove_runtime_exits
+                    .contains_key(&pane_id_val)
                 {
                     if let Some(update) = self
                         .app
                         .state
-                        .publish_pane_process_exit_if_agent(pane_id_val, false)
+                        .publish_terminal_process_exit_if_agent(&terminal_id_val, false)
                     {
                         self.app.emit_pane_state_update(&update);
                         self.forward_semantic_agent_notification(&update);
                         self.forward_pane_state_update_notifications_to_clients(&update);
                     }
                 }
+
+                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
+                for update in &pane_updates {
+                    self.forward_semantic_agent_notification(update);
+                    self.forward_pane_state_update_notifications_to_clients(update);
+                }
+                self.reconcile_client_shell_locations();
+                self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
+                self.reapply_controlled_shell_tab_geometry(false);
+
+                if self.app.state.terminal_location(&terminal_id_val).is_none() {
+                    let terminal_id = terminal_id_val.to_string();
+                    self.shutdown_terminal_stream_clients(
+                        &terminal_id,
+                        format!("terminal {terminal_id} exited"),
+                    );
+                }
+
+                true
+            }
+            AppEvent::WorktreeRuntimeRestoreFailed { pane_id, .. } => {
+                let focus_before = self.shell_focus_targets();
+                let focused_tabs_before = self.focused_shell_tabs();
+                let pane_id_val = *pane_id;
+                let terminal_id = self.app.state.workspaces.iter().find_map(|ws| {
+                    ws.panes
+                        .get(pane_id)
+                        .map(|pane| pane.active_terminal_id().to_string())
+                });
 
                 let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
                 for update in &pane_updates {

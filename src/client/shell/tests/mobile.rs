@@ -274,7 +274,7 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         .find_map(|(rect, target)| {
             matches!(
                 target,
-                ClientMobileTarget::Agent { pane_id, .. } if pane_id == "pane_1"
+                ClientMobileTarget::Agent { pane_id, .. } if pane_id == "tab_1"
             )
             .then_some(*rect)
         })
@@ -285,8 +285,8 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         ClientShellAction::Endpoint { request, .. }
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneFocus(params)
-                    if params.pane_id == "pane_1"
+                crate::api::schema::Method::TabFocus(params)
+                    if params.tab_id == "tab_1"
             )
     )));
 

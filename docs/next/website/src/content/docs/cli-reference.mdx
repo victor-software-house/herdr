@@ -188,16 +188,17 @@ Git rejects repositories owned by another user by default. If you have independe
 
 ```bash
 herdr tab list [--workspace <workspace_id>]
-herdr tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]
+herdr tab create [--workspace <workspace_id>] [--pane <pane_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]
 herdr tab get <tab_id>
 herdr tab focus <tab_id>
 herdr tab rename <tab_id> <label>
+herdr tab move <tab_id> <insert_index>
 herdr tab close <tab_id>
 ```
 
-A tab is another terminal layout inside a workspace. Without `--workspace`, `tab create` uses the active workspace and fails if none exists. Its JSON response exposes `.result.tab.tab_id` and `.result.root_pane.pane_id`. Closing a workspace's last tab also closes the workspace, matching the TUI close-tab action. If `confirm_close` is enabled and closing the tab would also close a whole worktree group, `tab close` returns a `confirmation_required` error instead.
+Each pane owns an ordered stack of terminal tabs. Public tab IDs are pane-qualified, such as `w1:p2:t3`. `tab list` includes every pane stack in the selected workspace. `tab create --pane` targets that pane; without `--pane`, it uses the selected workspace's focused pane, or the active workspace's focused pane when both targets are omitted. Its compatibility response exposes the owner as both `.result.tab.pane_id` and `.result.root_pane.pane_id`. `tab focus` focuses the owner pane and selects that terminal. `tab move` reorders only the owner pane's stack. Closing a pane's sole tab closes the pane, and closing the workspace's sole pane also closes the workspace. If `confirm_close` is enabled and that would close a worktree group, `tab close` returns `confirmation_required`.
 
-Workspace and tab creation, and pane splitting, leave focus unchanged by default. `--focus` selects the new layout; `--no-focus` states the default explicitly. Without `--cwd`, new terminals follow the configured `terminal.new_cwd` policy, which follows the source pane or workspace by default. Each `--env KEY=VALUE` adds or replaces that variable in the new root shell.
+Workspace and tab creation, and pane splitting, leave focus unchanged by default. `--focus` selects the new resource; `--no-focus` states the default explicitly. Without `--cwd`, new terminals follow the configured `terminal.new_cwd` policy, which follows the owner pane or workspace by default. Each `--env KEY=VALUE` adds or replaces that variable in the new terminal shell.
 
 ## Panes
 
@@ -264,10 +265,10 @@ aliases for `ctrl+c`.
 
 `pane run` honors live bracketed-paste mode and submits text plus Enter atomically. Prefer it over `send-text` plus `send-keys Enter` for commands; the separate send operations remain low-level and non-submitting.
 
-Report agent state from custom hooks:
+Report agent state from custom hooks. Use the exact pane-qualified tab ID when available:
 
 ```bash
-herdr pane report-agent <pane_id> \
+herdr pane report-agent <tab_or_pane_id> \
   --source ID \
   --agent LABEL \
   --state idle|working|blocked|unknown \
@@ -276,7 +277,7 @@ herdr pane report-agent <pane_id> \
   [--agent-session-id ID] \
   [--agent-session-path PATH]
 
-herdr pane report-agent-session <pane_id> \
+herdr pane report-agent-session <tab_or_pane_id> \
   --source ID \
   --agent LABEL \
   [--seq N] \
@@ -284,13 +285,13 @@ herdr pane report-agent-session <pane_id> \
   [--agent-session-path PATH] \
   [--session-start-source SOURCE]
 
-herdr pane release-agent <pane_id> \
+herdr pane release-agent <tab_or_pane_id> \
   --source ID \
   --agent LABEL \
   [--seq N]
 ```
 
-`report-agent-session` updates native session identity without reporting lifecycle state. `release-agent` ends that source's lifecycle authority when its agent process exits.
+`report-agent`, `report-agent-session`, `report-metadata`, `clear-agent-authority`, and `release-agent` accept an exact terminal ID or pane-qualified tab ID. A legacy pane ID works only while that pane has one tab; a stacked pane returns `pane_target_ambiguous` with candidate tab IDs. `report-agent-session` updates native session identity without reporting lifecycle state. `release-agent` ends that source's lifecycle authority when its agent process exits.
 
 `pane get`, `pane list`, `agent get`, and `agent list` include a read-only `agent_session` object when an official integration has reported a native session reference. If no native session reference is stored, the field is omitted.
 

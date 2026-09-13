@@ -2,7 +2,7 @@
 // managed by herdl; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDL_INTEGRATION_ID=kilo
-// HERDL_INTEGRATION_VERSION=4
+// HERDL_INTEGRATION_VERSION=5
 
 import net from "node:net";
 
@@ -41,7 +41,7 @@ function stateFromSessionStatus(status) {
 }
 
 function request(method, params) {
-  const paneId = process.env.HERDL_PANE_ID;
+  const paneId = process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID;
   const socketPath = process.env.HERDL_SOCKET_PATH;
 
   if (!paneId || !socketPath) {
@@ -106,7 +106,7 @@ export const HerDLAgentStatePlugin = async () => {
   if (
     process.env.HERDL_ENV !== "1" ||
     !process.env.HERDL_SOCKET_PATH ||
-    !process.env.HERDL_PANE_ID
+    !(process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID)
   ) {
     return {};
   }

@@ -66,6 +66,8 @@ pub struct WorkspaceInfo {
     pub focused: bool,
     pub pane_count: usize,
     pub tab_count: usize,
+    #[serde(default)]
+    pub focused_pane_id: String,
     pub active_tab_id: String,
     pub agent_status: AgentStatus,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

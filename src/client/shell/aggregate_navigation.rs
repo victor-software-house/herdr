@@ -43,7 +43,7 @@ pub(super) struct AggregateAgentRow<'a> {
 
 pub(super) struct AggregateAgentTarget {
     pub(super) endpoint_id: ClientEndpointId,
-    pub(super) pane_id: String,
+    pub(super) tab_id: String,
 }
 
 pub(super) fn aggregate_agent_rows(
@@ -54,16 +54,16 @@ pub(super) fn aggregate_agent_rows(
         .flat_map(|endpoint| {
             super::agent_sidebar::ordered_agent_pane_ids(endpoint.snapshot, sort)
                 .into_iter()
-                .filter_map(move |pane_id| {
+                .filter_map(move |tab_id| {
                     let agent = endpoint
                         .snapshot
                         .agents
                         .iter()
-                        .find(|agent| agent.pane_id == pane_id)?;
+                        .find(|agent| agent.tab_id == tab_id)?;
                     Some(AggregateAgentRow {
                         recency: endpoint
                             .agent_recency
-                            .get(&pane_id)
+                            .get(&tab_id)
                             .copied()
                             .unwrap_or_default(),
                         endpoint,
@@ -93,7 +93,7 @@ pub(super) fn online_agent_targets(
         .filter(|row| !row.endpoint.stale())
         .map(|row| AggregateAgentTarget {
             endpoint_id: row.endpoint.endpoint_id.clone(),
-            pane_id: row.agent.pane_id.clone(),
+            tab_id: row.agent.tab_id.clone(),
         })
         .collect()
 }
@@ -140,7 +140,7 @@ pub(super) fn navigator_rows(
                         let agent = snapshot
                             .agents
                             .iter()
-                            .find(|agent| agent.pane_id == pane.pane_id);
+                            .find(|agent| agent.tab_id == pane.tab_id);
                         let status = agent
                             .map_or(crate::api::schema::AgentStatus::Unknown, |agent| {
                                 agent.agent_status

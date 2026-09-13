@@ -397,23 +397,13 @@ mod tests {
         );
         app.state.default_shell = exiting_test_command().into();
         app.state.shell_mode = ShellModeConfig::NonLogin;
-        app.state.workspaces = vec![Workspace::test_new("spaces")];
+        let mut workspace = Workspace::test_new("spaces");
+        let focused_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        workspace.layout.focus_pane(focused_pane);
+        app.state.workspaces = vec![workspace];
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.ensure_test_terminals();
-
-        // Second tab becomes the focused pane, away from tab 1's root pane.
-        let response = app.handle_tab_create(
-            "tab".into(),
-            crate::api::schema::TabCreateParams {
-                workspace_id: None,
-                cwd: None,
-                focus: true,
-                label: None,
-                env: Default::default(),
-            },
-        );
-        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
         // Drop runtimes so cwd resolution deterministically uses cached state.
         shutdown_test_runtimes(&mut app);
 
@@ -428,8 +418,8 @@ mod tests {
         std::fs::create_dir_all(&focused_cwd).unwrap();
         let ws = &app.state.workspaces[0];
         let root_cwd = ws.identity_cwd.clone();
-        let focused_pane = ws.focused_pane_id().unwrap();
-        assert_ne!(focused_pane, ws.tabs[0].root_pane);
+        assert_eq!(ws.focused_pane_id(), Some(focused_pane));
+        assert_ne!(focused_pane, ws.root_pane);
         let terminal_id = ws.terminal_id(focused_pane).cloned().unwrap();
         app.state.terminals.get_mut(&terminal_id).unwrap().cwd = focused_cwd.clone();
 
@@ -638,10 +628,10 @@ mod tests {
         app.state.selected = 1;
         app.state.mode = crate::app::Mode::Terminal;
         app.state.ensure_test_terminals();
-        let closed_pane_ids = [0, 2].map(|index| app.state.workspaces[index].tabs[0].root_pane);
+        let closed_pane_ids = [0, 2].map(|index| app.state.workspaces[index].root_pane);
         let closed_terminal_ids = [0, 2].map(|index| {
             app.state
-                .terminal_id_for_pane(index, app.state.workspaces[index].tabs[0].root_pane)
+                .terminal_id_for_pane(index, app.state.workspaces[index].root_pane)
                 .expect("closed workspace pane has a terminal")
         });
         for pane_id in closed_pane_ids {

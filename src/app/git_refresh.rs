@@ -300,7 +300,6 @@ mod tests {
         let cwd = std::env::temp_dir().join(format!("herdr-uncached-cwd-{}", std::process::id()));
         let mut ws = Workspace::test_new("test");
         ws.identity_cwd = cwd.clone();
-        ws.tabs.clear();
         app.state.workspaces.push(ws);
 
         let items = app.workspace_git_refresh_items(false);
@@ -319,7 +318,6 @@ mod tests {
         ws.identity_cwd = cwd.clone();
         ws.cached_identity_cwd = cwd;
         ws.cached_git_status_key = cache_key.clone();
-        ws.tabs.clear();
         app.state.workspaces.push(ws);
 
         let items = app.workspace_git_refresh_items(false);
@@ -336,7 +334,6 @@ mod tests {
         ws.identity_cwd = cwd.clone();
         ws.cached_identity_cwd = cwd;
         ws.cached_git_status_key = PathBuf::from("/repo");
-        ws.tabs.clear();
         app.state.workspaces.push(ws);
 
         let items = app.workspace_git_refresh_items(true);

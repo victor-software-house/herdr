@@ -1,0 +1,78 @@
+{
+  "version": 4,
+  "workspaces": [
+    {
+      "id": "wfixture",
+      "custom_name": "fixture",
+      "identity_cwd": "/tmp",
+      "next_public_pane_number": 6,
+      "next_public_tab_number": 8,
+      "layout": {
+        "Split": {
+          "direction": "Horizontal",
+          "ratio": 0.5,
+          "first": { "Pane": 10 },
+          "second": { "Pane": 20 }
+        }
+      },
+      "panes": {
+        "10": {
+          "number": 2,
+          "tabs": [
+            {
+              "number": 1,
+              "custom_name": "shell",
+              "terminal_id": "term_fixture_1",
+              "runtime_attached": true,
+              "seen": true,
+              "terminal": { "cwd": "/tmp" }
+            },
+            {
+              "number": 4,
+              "custom_name": "agent",
+              "terminal_id": "term_fixture_4",
+              "runtime_attached": true,
+              "seen": false,
+              "terminal": {
+                "cwd": "/tmp",
+                "label": "reviewer",
+                "agent_session": {
+                  "source": "herdl:pi",
+                  "agent": "pi",
+                  "kind": "id",
+                  "value": "fixture-session"
+                },
+                "launch_argv": ["pi", "--session", "fixture-session"]
+              }
+            }
+          ],
+          "active_tab": 1,
+          "right_click_passthrough": true
+        },
+        "20": {
+          "number": 5,
+          "tabs": [
+            {
+              "number": 7,
+              "terminal_id": "term_fixture_7",
+              "runtime_attached": true,
+              "seen": true,
+              "terminal": { "cwd": "/tmp" }
+            }
+          ],
+          "active_tab": 0,
+          "right_click_passthrough": false
+        }
+      },
+      "zoomed": false,
+      "focused": 10,
+      "root_pane": 10
+    }
+  ],
+  "active": 0,
+  "selected": 0,
+  "public_pane_aliases": {},
+  "sidebar_width": null,
+  "sidebar_section_split": null,
+  "collapsed_space_keys": []
+}

@@ -12,7 +12,7 @@ use crate::ipc::LocalStream;
 use crate::protocol::endpoint::{
     EndpointClientHello, EndpointServerWelcome, BLOB_CODEC_V1, ENDPOINT_HELLO_KIND,
     ENDPOINT_PROTOCOL_GENERATION, ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1, SNAPSHOT_CODEC_V1,
-    SURFACE_CODEC_V1,
+    SNAPSHOT_CODEC_V2, SURFACE_CODEC_V1,
 };
 use crate::protocol::{
     self, ClientMessage, RenderEncoding, ServerMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
@@ -182,7 +182,7 @@ pub(super) fn do_handshake(
             endpoint_keybindings,
             mouse_capture,
             surface_active,
-            snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
+            snapshot_codecs: vec![SNAPSHOT_CODEC_V2.into(), SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
             blob_codecs: vec![BLOB_CODEC_V1.into()],
@@ -250,7 +250,10 @@ pub(super) fn do_handshake(
             });
         }
         if welcome.generation != ENDPOINT_PROTOCOL_GENERATION
-            || welcome.snapshot_codec != SNAPSHOT_CODEC_V1
+            || !matches!(
+                welcome.snapshot_codec.as_str(),
+                SNAPSHOT_CODEC_V2 | SNAPSHOT_CODEC_V1
+            )
             || welcome.surface_codec != SURFACE_CODEC_V1
             || welcome.input_codec != INPUT_CODEC_V1
             || welcome.blob_codec != BLOB_CODEC_V1

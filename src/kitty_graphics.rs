@@ -509,20 +509,10 @@ fn collect_visible_placements(
         return Vec::new();
     };
     let ws_idx = target.workspace_index;
-    if app
-        .workspaces
-        .get(ws_idx)
-        .and_then(|workspace| workspace.tabs.get(target.tab_index))
-        .is_none()
-    {
-        tracing::debug!(
-            ws_idx,
-            tab_idx = target.tab_index,
-            "collect_visible_placements: no target tab"
-        );
+    if app.workspaces.get(ws_idx).is_none() {
+        tracing::debug!(ws_idx, "collect_visible_placements: no target workspace");
         return Vec::new();
     }
-
     tracing::debug!(
         ws_idx,
         terminal_runtimes_len = terminal_runtimes.len(),
@@ -558,7 +548,12 @@ fn collect_visible_placements(
             ));
         }
 
-        let runtime = match app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
+        let runtime = surface
+            .terminal_overrides
+            .and_then(|overrides| overrides.get(&info.id))
+            .and_then(|terminal_id| terminal_runtimes.get(terminal_id))
+            .or_else(|| app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id));
+        let runtime = match runtime {
             Some(rt) => rt,
             None => {
                 tracing::debug!(pane_id = ?info.id, "collect_visible_placements: runtime not found");

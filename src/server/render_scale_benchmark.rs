@@ -95,6 +95,7 @@ impl RenderPipeline {
             },
             &self.graphics_delivery,
             1,
+            None,
         );
         let server_elapsed = started.elapsed();
         self.graphics_delivery = rendered.graphics_delivery;
@@ -134,7 +135,7 @@ fn workspaces(workspace_count: usize) -> Vec<Workspace> {
     (0..workspace_count)
         .map(|index| {
             let mut workspace = Workspace::test_new(&format!("bench-{}", index + 1));
-            let root_pane = workspace.tabs[0].root_pane;
+            let root_pane = workspace.root_pane;
             workspace.insert_test_runtime(root_pane, runtime(&history));
             workspace
         })
@@ -144,13 +145,13 @@ fn workspaces(workspace_count: usize) -> Vec<Workspace> {
 fn active_panes(pane_count: usize) -> Vec<Workspace> {
     let history = history();
     let mut workspace = Workspace::test_new("bench");
-    let root_pane = workspace.tabs[0].root_pane;
+    let root_pane = workspace.root_pane;
     workspace.insert_test_runtime(root_pane, runtime(&history));
     let mut pane_ids = vec![root_pane];
 
     for index in 1..pane_count {
         let target = pane_ids[(index - 1) / 2];
-        workspace.tabs[0].layout.focus_pane(target);
+        workspace.layout.focus_pane(target);
         let direction = if index % 2 == 0 {
             Direction::Vertical
         } else {

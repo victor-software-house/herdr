@@ -940,6 +940,10 @@
             "focused_pane_id": {
               "type": "string"
             },
+            "pane_id": {
+              "default": "",
+              "type": "string"
+            },
             "panes": {
               "items": {
                 "$ref": "#/schemas/event/$defs/PaneLayoutPane"
@@ -1050,6 +1054,10 @@
               "minimum": 0,
               "type": "integer"
             },
+            "pane_id": {
+              "default": "",
+              "type": "string"
+            },
             "tab_id": {
               "type": "string"
             },
@@ -1078,6 +1086,10 @@
             },
             "focused": {
               "type": "boolean"
+            },
+            "focused_pane_id": {
+              "default": "",
+              "type": "string"
             },
             "label": {
               "type": "string"
@@ -4336,6 +4348,45 @@
             }
           ]
         },
+        "TabCreateInPaneParams": {
+          "properties": {
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "focus": {
+              "default": false,
+              "type": "boolean"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "pane_id"
+          ],
+          "type": "object"
+        },
         "TabCreateParams": {
           "properties": {
             "cwd": {
@@ -5187,6 +5238,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/TabCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "tab.create_in_pane",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TabCreateInPaneParams"
             }
           },
           "required": [
@@ -7731,6 +7798,10 @@
             "focused_pane_id": {
               "type": "string"
             },
+            "pane_id": {
+              "default": "",
+              "type": "string"
+            },
             "root": {
               "$ref": "#/schemas/success_response/$defs/LayoutNode"
             },
@@ -8103,6 +8174,10 @@
               "$ref": "#/schemas/success_response/$defs/PaneLayoutRect"
             },
             "focused_pane_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "default": "",
               "type": "string"
             },
             "panes": {
@@ -10655,6 +10730,10 @@
               "minimum": 0,
               "type": "integer"
             },
+            "pane_id": {
+              "default": "",
+              "type": "string"
+            },
             "tab_id": {
               "type": "string"
             },
@@ -10683,6 +10762,10 @@
             },
             "focused": {
               "type": "boolean"
+            },
+            "focused_pane_id": {
+              "default": "",
+              "type": "string"
             },
             "label": {
               "type": "string"

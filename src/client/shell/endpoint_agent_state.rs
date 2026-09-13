@@ -18,15 +18,11 @@ impl EndpointAgentPresentation {
                 snapshot
                     .agents
                     .iter()
-                    .map(|agent| (agent.pane_id.clone(), agent.state_change_seq)),
+                    .map(|agent| (agent.tab_id.clone(), agent.state_change_seq)),
             );
         }
-        self.acknowledged.retain(|pane_id, _| {
-            snapshot
-                .agents
-                .iter()
-                .any(|agent| &agent.pane_id == pane_id)
-        });
+        self.acknowledged
+            .retain(|tab_id, _| snapshot.agents.iter().any(|agent| &agent.tab_id == tab_id));
         for agent in &mut snapshot.agents {
             agent.agent_status = self.projected_status(agent);
         }
@@ -49,14 +45,22 @@ impl EndpointAgentPresentation {
 
         let mut changed = false;
         for pane in &surface.panes {
-            let Some(agent) = snapshot
-                .agents
+            let Some(active_tab_id) = snapshot
+                .panes
                 .iter()
-                .find(|agent| agent.pane_id == pane.pane_id)
+                .find(|snapshot_pane| snapshot_pane.pane_id == pane.pane_id)
+                .map(|snapshot_pane| snapshot_pane.tab_id.as_str())
             else {
                 continue;
             };
-            let acknowledged = self.acknowledged.entry(agent.pane_id.clone()).or_default();
+            let Some(agent) = snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.tab_id == active_tab_id)
+            else {
+                continue;
+            };
+            let acknowledged = self.acknowledged.entry(agent.tab_id.clone()).or_default();
             if *acknowledged < agent.state_change_seq {
                 *acknowledged = agent.state_change_seq;
                 changed = true;
@@ -76,7 +80,7 @@ impl EndpointAgentPresentation {
             AgentStatus::Idle | AgentStatus::Done => {
                 if self
                     .acknowledged
-                    .get(&agent.pane_id)
+                    .get(&agent.tab_id)
                     .is_some_and(|sequence| *sequence >= agent.state_change_seq)
                 {
                     AgentStatus::Idle
@@ -142,6 +146,8 @@ mod tests {
         let mut snapshot = crate::client::shell::tests::snapshot();
         snapshot.boot_id = "endpoint-boot".into();
         snapshot.revision = revision;
+        snapshot.panes[0].pane_id = "agent-pane".into();
+        snapshot.panes[0].tab_id = "tab".into();
         snapshot.agents = vec![agent(status, sequence)];
         snapshot
     }

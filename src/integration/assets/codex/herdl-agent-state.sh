@@ -3,7 +3,7 @@
 # managed by herdl; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDL_INTEGRATION_ID=codex
-# HERDL_INTEGRATION_VERSION=8
+# HERDL_INTEGRATION_VERSION=9
 
 set -eu
 
@@ -19,7 +19,7 @@ esac
 
 [ "${HERDL_ENV:-}" = "1" ] || exit 0
 [ -n "${HERDL_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDL_PANE_ID:-}" ] || exit 0
+[ -n "${HERDL_TAB_ID:-${HERDL_PANE_ID:-}}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 HERDL_ACTION="$action" HERDL_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
@@ -31,7 +31,7 @@ import time
 
 source = "herdl:codex"
 action = os.environ.get("HERDL_ACTION", "")
-pane_id = os.environ.get("HERDL_PANE_ID")
+pane_id = os.environ.get("HERDL_TAB_ID") or os.environ.get("HERDL_PANE_ID")
 socket_path = os.environ.get("HERDL_SOCKET_PATH")
 hook_input_file = os.environ.get("HERDL_HOOK_INPUT_FILE")
 

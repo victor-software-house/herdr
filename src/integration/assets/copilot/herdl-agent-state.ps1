@@ -2,10 +2,11 @@
 # managed by herdl; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDL_INTEGRATION_ID=copilot
-# HERDL_INTEGRATION_VERSION=3
+# HERDL_INTEGRATION_VERSION=4
 
 if ($env:HERDL_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDL_PANE_ID)) { exit 0 }
+$targetId = if (![string]::IsNullOrWhiteSpace($env:HERDL_TAB_ID)) { $env:HERDL_TAB_ID } else { $env:HERDL_PANE_ID }
+if ([string]::IsNullOrWhiteSpace($targetId)) { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HERDL_SOCKET_PATH)) { exit 0 }
 
 $inputText = [Console]::In.ReadToEnd()
@@ -50,4 +51,4 @@ if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $herdl = if ([string]::IsNullOrWhiteSpace($env:HERDL_BIN_PATH)) { "herdl" } else { $env:HERDL_BIN_PATH }
-& $herdl pane report-agent-session $env:HERDL_PANE_ID --source herdl:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
+& $herdl pane report-agent-session $targetId --source herdl:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null

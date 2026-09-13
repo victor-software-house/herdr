@@ -8,6 +8,9 @@ pub(crate) fn collect_retained(
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
     client_id: u64,
+    terminal_overrides: Option<
+        &std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    >,
 ) -> Option<(SurfaceGraphicsScene, DeliveryCache)> {
     let rect = |rect: crate::protocol::SurfaceRect| {
         ratatui::layout::Rect::new(rect.x, rect.y, rect.width, rect.height)
@@ -40,6 +43,7 @@ pub(crate) fn collect_retained(
         cell_size,
         delivered,
         client_id,
+        terminal_overrides,
     ))
 }
 
@@ -52,6 +56,9 @@ pub(crate) fn collect(
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
     client_id: u64,
+    terminal_overrides: Option<
+        &std::collections::HashMap<crate::layout::PaneId, crate::terminal::TerminalId>,
+    >,
 ) -> (SurfaceGraphicsScene, DeliveryCache) {
     let popup_content_size = popup.map(|popup| (popup.frame.width, popup.frame.height));
     crate::kitty_graphics::surface::collect_scene(
@@ -60,6 +67,7 @@ pub(crate) fn collect(
             target,
             pane_infos,
             split_borders,
+            terminal_overrides,
         },
         popup_content_size,
         cell_size,

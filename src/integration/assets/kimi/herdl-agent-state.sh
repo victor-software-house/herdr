@@ -1,7 +1,7 @@
 #!/bin/sh
 # managed by herdl; reinstalling the integration replaces this file.
 # HERDL_INTEGRATION_ID=kimi
-# HERDL_INTEGRATION_VERSION=7
+# HERDL_INTEGRATION_VERSION=8
 
 action="${1:-}"
 case "$action" in
@@ -11,7 +11,7 @@ esac
 
 [ "${HERDL_ENV:-}" = "1" ] || exit 0
 [ -n "${HERDL_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDL_PANE_ID:-}" ] || exit 0
+[ -n "${HERDL_TAB_ID:-${HERDL_PANE_ID:-}}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 python3 -c '
@@ -33,7 +33,7 @@ if not isinstance(session_id, str) or not session_id:
 
 seq = time.time_ns()
 params = {
-    "pane_id": os.environ["HERDL_PANE_ID"],
+    "pane_id": os.environ.get("HERDL_TAB_ID") or os.environ["HERDL_PANE_ID"],
     "source": "herdl:kimi",
     "agent": "kimi",
     "seq": seq,

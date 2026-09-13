@@ -2,13 +2,14 @@
 # managed by herdl; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDL_INTEGRATION_ID=qwen
-# HERDL_INTEGRATION_VERSION=1
+# HERDL_INTEGRATION_VERSION=2
 
 param([string]$Action = "")
 
 if ($Action -ne "session") { exit 0 }
 if ($env:HERDL_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDL_PANE_ID)) { exit 0 }
+$targetId = if (![string]::IsNullOrWhiteSpace($env:HERDL_TAB_ID)) { $env:HERDL_TAB_ID } else { $env:HERDL_PANE_ID }
+if ([string]::IsNullOrWhiteSpace($targetId)) { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HERDL_SOCKET_PATH)) { exit 0 }
 
 $inputText = [Console]::In.ReadToEnd()
@@ -23,7 +24,7 @@ if ($null -eq $payload -or [string]::IsNullOrWhiteSpace($payload.session_id)) { 
 $seq = [DateTime]::UtcNow.Ticks
 $herdl = if ([string]::IsNullOrWhiteSpace($env:HERDL_BIN_PATH)) { "herdl" } else { $env:HERDL_BIN_PATH }
 $commandArgs = @(
-    "pane", "report-agent-session", $env:HERDL_PANE_ID,
+    "pane", "report-agent-session", $targetId,
     "--source", "herdl:qwen", "--agent", "qwen",
     "--agent-session-id", [string]$payload.session_id,
     "--seq", [string]$seq

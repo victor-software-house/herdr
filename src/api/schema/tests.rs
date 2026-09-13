@@ -572,7 +572,8 @@ fn event_envelope_round_trips() {
             data: EventData::LayoutUpdated {
                 layout: PaneLayoutSnapshot {
                     workspace_id: "w_1".into(),
-                    tab_id: "w_1:1".into(),
+                    pane_id: "w_1:p1".into(),
+                    tab_id: "w_1:p1:t1".into(),
                     zoomed: false,
                     area: PaneLayoutRect {
                         x: 0,
@@ -798,7 +799,8 @@ fn worktree_request_and_response_round_trip() {
                 focused: true,
                 pane_count: 1,
                 tab_count: 1,
-                active_tab_id: "w_1:1".into(),
+                focused_pane_id: "w_1:p1".into(),
+                active_tab_id: "w_1:p1:t1".into(),
                 agent_status: AgentStatus::Unknown,
                 tokens: HashMap::new(),
                 worktree: Some(WorkspaceWorktreeInfo {
@@ -810,8 +812,9 @@ fn worktree_request_and_response_round_trip() {
                 }),
             },
             tab: TabInfo {
-                tab_id: "w_1:1".into(),
+                tab_id: "w_1:p1:t1".into(),
                 workspace_id: "w_1".into(),
+                pane_id: "w_1:p1".into(),
                 number: 1,
                 label: "herdr".into(),
                 focused: true,
@@ -884,7 +887,8 @@ fn worktree_lifecycle_events_round_trip() {
         focused: true,
         pane_count: 1,
         tab_count: 1,
-        active_tab_id: "w_2:1".into(),
+        focused_pane_id: "w_2:p1".into(),
+        active_tab_id: "w_2:p1:t1".into(),
         agent_status: AgentStatus::Unknown,
         tokens: HashMap::new(),
         worktree: Some(WorkspaceWorktreeInfo {
@@ -1115,7 +1119,8 @@ fn layout_export_apply_round_trip() {
         result: ResponseResult::LayoutExport {
             layout: LayoutDescription {
                 workspace_id: "w1".into(),
-                tab_id: "w1:1".into(),
+                pane_id: "w1:p1".into(),
+                tab_id: "w1:p1:t1".into(),
                 zoomed: false,
                 focused_pane_id: "w1-1".into(),
                 root,
@@ -1131,7 +1136,8 @@ fn layout_export_apply_round_trip() {
         result: ResponseResult::LayoutSplitRatioSet {
             layout: LayoutDescription {
                 workspace_id: "w1".into(),
-                tab_id: "w1:1".into(),
+                pane_id: "w1:p1".into(),
+                tab_id: "w1:p1:t1".into(),
                 zoomed: false,
                 focused_pane_id: "w1-1".into(),
                 root: LayoutNode::Pane {
@@ -1238,8 +1244,9 @@ fn create_response_round_trips_with_root_pane() {
         id: "req_2".into(),
         result: ResponseResult::TabCreated {
             tab: TabInfo {
-                tab_id: "w_1:2".into(),
+                tab_id: "w_1:p3:t2".into(),
                 workspace_id: "w_1".into(),
+                pane_id: "w_1:p3".into(),
                 number: 2,
                 label: "review".into(),
                 focused: false,

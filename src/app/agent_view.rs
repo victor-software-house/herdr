@@ -336,9 +336,16 @@ fn context_value(app: &AppState, context: AgentViewContext) -> Option<EvalValue>
     match context {
         AgentViewContext::CurrentWorkspaceId => Some(EvalValue::String(workspace.id.clone())),
         AgentViewContext::CurrentTabId => {
-            let tab_number = workspace.public_tab_number(workspace.active_tab)?;
+            let pane_id = workspace.focused_pane_id()?;
+            let pane = workspace.pane_state(pane_id)?;
+            let tab_number = pane.tabs.get(pane.active_tab)?.number;
+            let pane_number = workspace.public_pane_number(pane_id)?;
             Some(EvalValue::String(
-                crate::workspace::public_tab_id_for_number(&workspace.id, tab_number),
+                crate::workspace::public_pane_tab_id_for_number(
+                    &workspace.id,
+                    pane_number,
+                    tab_number,
+                ),
             ))
         }
     }
@@ -360,8 +367,9 @@ fn sort_value(
             AgentViewBuiltinSortField::TabOrder => app
                 .workspaces
                 .get(entry.ws_idx)
-                .and_then(|workspace| workspace.public_tab_number(entry.tab_idx))
-                .map(|number| EvalValue::Number(number as u64)),
+                .and_then(|workspace| workspace.pane_state(entry.pane_id))
+                .and_then(|pane| pane.tabs.get(entry.tab_idx))
+                .map(|tab| EvalValue::Number(tab.number as u64)),
             AgentViewBuiltinSortField::PaneOrder => app
                 .workspaces
                 .get(entry.ws_idx)
@@ -404,10 +412,16 @@ fn status_name(state: crate::detect::AgentState, seen: bool) -> String {
 
 fn public_tab_id(app: &AppState, entry: &AgentPanelEntry) -> Option<String> {
     let workspace = app.workspaces.get(entry.ws_idx)?;
-    let number = workspace.public_tab_number(entry.tab_idx)?;
-    Some(crate::workspace::public_tab_id_for_number(
+    let pane_number = workspace.public_pane_number(entry.pane_id)?;
+    let tab_number = workspace
+        .pane_state(entry.pane_id)?
+        .tabs
+        .get(entry.tab_idx)?
+        .number;
+    Some(crate::workspace::public_pane_tab_id_for_number(
         &workspace.id,
-        number,
+        pane_number,
+        tab_number,
     ))
 }
 
@@ -434,9 +448,9 @@ mod tests {
         state.active = Some(0);
         state.selected = 0;
         for (ws_idx, agent_state) in [(0, AgentState::Idle), (1, AgentState::Working)] {
-            let pane_id = state.workspaces[ws_idx].tabs[0].root_pane;
-            let terminal_id = state.workspaces[ws_idx].tabs[0].panes[&pane_id]
-                .attached_terminal_id
+            let pane_id = state.workspaces[ws_idx].root_pane;
+            let terminal_id = state.workspaces[ws_idx].panes[&pane_id]
+                .active_terminal_id()
                 .clone();
             let terminal = state.terminals.get_mut(&terminal_id).unwrap();
             terminal.detected_agent = Some(Agent::Claude);
@@ -484,9 +498,9 @@ mod tests {
     #[test]
     fn boolean_filter_and_custom_sort_define_canonical_entries() {
         let mut state = state_with_agents();
-        let first_pane = state.workspaces[0].tabs[0].root_pane;
-        let first_terminal = state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+        let first_pane = state.workspaces[0].root_pane;
+        let first_terminal = state.workspaces[0].panes[&first_pane]
+            .active_terminal_id()
             .clone();
         state.terminals.get_mut(&first_terminal).unwrap().state = AgentState::Working;
         state.agent_view_override = Some(AgentViewSetParams {
@@ -521,9 +535,9 @@ mod tests {
     #[test]
     fn agent_filter_matches_custom_lifecycle_agent_label() {
         let mut state = state_with_agents();
-        let pane_id = state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = state.workspaces[0].root_pane;
+        let terminal_id = state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         state
             .terminals

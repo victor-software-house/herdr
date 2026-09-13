@@ -114,7 +114,7 @@ async fn first_kitty_image_updates_retained_surface_without_full_redraw() {
         pane_id,
         b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\",
     );
-    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    assert!(server.render_retained_pane_surface_and_stream(&terminal_sources(&server, [pane_id],)));
     let ServerMessage::PaneSurface(repainted) =
         read_server_message(receive_render(&client_rx, Duration::from_millis(100)))
     else {
@@ -126,7 +126,7 @@ async fn first_kitty_image_updates_retained_surface_without_full_redraw() {
 
     // Text changes while an image is visible must reuse its uploaded pixels.
     write_shared_test_pane(&mut server, pane_id, b"\rupdated text");
-    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    assert!(server.render_retained_pane_surface_and_stream(&terminal_sources(&server, [pane_id],)));
     let ServerMessage::PaneSurface(text_update) =
         read_server_message(receive_render(&client_rx, Duration::from_millis(100)))
     else {
@@ -140,7 +140,7 @@ async fn first_kitty_image_updates_retained_surface_without_full_redraw() {
     assert!(frame_text(&text_update.frame).contains("updated text"));
 
     write_shared_test_pane(&mut server, pane_id, b"\x1b_Ga=d,d=A\x1b\\");
-    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    assert!(server.render_retained_pane_surface_and_stream(&terminal_sources(&server, [pane_id],)));
     let ServerMessage::PaneSurface(deleted) =
         read_server_message(receive_render(&client_rx, Duration::from_millis(100)))
     else {
@@ -150,7 +150,7 @@ async fn first_kitty_image_updates_retained_surface_without_full_redraw() {
     assert!(deleted.graphics.assets.is_empty());
 
     write_shared_test_pane(&mut server, pane_id, b"\rtext only again");
-    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    assert!(server.render_retained_pane_surface_and_stream(&terminal_sources(&server, [pane_id],)));
     assert!(matches!(
         read_server_message(receive_render(&client_rx, Duration::from_millis(100))),
         ServerMessage::PaneSurfacePatch(_)
@@ -163,7 +163,7 @@ async fn first_kitty_image_updates_retained_surface_without_full_redraw() {
         pane_id,
         b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\",
     );
-    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    assert!(server.render_retained_pane_surface_and_stream(&terminal_sources(&server, [pane_id],)));
     assert!(server.clients[&1]
         .render_state
         .last_pane_surface()
@@ -192,7 +192,7 @@ async fn retained_unicode_image_arrives_after_fragmented_upload_without_reupload
     };
     server.render_and_stream();
     let _ = receive_render(&client_rx, Duration::from_millis(100));
-    let sources = HashSet::from([pane_id]);
+    let sources = terminal_sources(&server, [pane_id]);
     // Yazi-style virtual placement: uploading the image and drawing its Unicode cell
     // can happen in separate PTY reads, with no text dirty rows when upload completes.
     for bytes in [
@@ -264,9 +264,7 @@ async fn render_scale_profile_retained_graphics() {
                 let mut pane_ids = vec![root];
                 for index in 1..count {
                     let workspace = &mut server.app.state.workspaces[0];
-                    workspace.tabs[0]
-                        .layout
-                        .focus_pane(pane_ids[(index - 1) / 2]);
+                    workspace.layout.focus_pane(pane_ids[(index - 1) / 2]);
                     let id = workspace.test_split(if index % 2 == 0 {
                         Direction::Vertical
                     } else {
@@ -297,7 +295,7 @@ async fn render_scale_profile_retained_graphics() {
                 }
                 server.render_and_stream();
                 let _ = receive_render(&client_rx, Duration::from_millis(100));
-                let sources = pane_ids.iter().copied().collect();
+                let sources = terminal_sources(&server, pane_ids.iter().copied());
                 let mut samples = Vec::new();
                 for sample in 0..110 {
                     for id in &pane_ids {
@@ -402,6 +400,92 @@ async fn client_shell_delivers_equal_pixels_for_distinct_terminal_image_ids() {
     };
     assert_eq!(surface.graphics.placements.len(), 2);
     assert!(surface.graphics.assets.is_empty());
+}
+
+#[tokio::test]
+async fn client_shell_graphics_follow_each_clients_selected_sibling_terminal() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("selected-graphics");
+    let pane_id = workspace.root_pane;
+    let second_tab = workspace.test_add_tab_to_pane(pane_id, Some("second"));
+    let first_terminal = workspace.pane_state(pane_id).unwrap().tabs[0]
+        .terminal_id
+        .clone();
+    let second_terminal = workspace.pane_state(pane_id).unwrap().tabs[second_tab]
+        .terminal_id
+        .clone();
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.terminal_runtimes.insert(
+        first_terminal.clone(),
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(
+            80,
+            24,
+            b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\",
+        ),
+    );
+    server.app.terminal_runtimes.insert(
+        second_terminal.clone(),
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(
+            80,
+            24,
+            b"\x1b_Ga=T,f=32,t=d,i=7,p=4,s=1,v=1,c=1,r=1,q=2;AP8A/w==\x1b\\",
+        ),
+    );
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let second_tab_id = server
+        .app
+        .public_tab_id_for_pane(0, pane_id, second_tab)
+        .unwrap();
+
+    let (first_control, first_render) = connect_matching_test_shell(&mut server, 41);
+    let (second_control, second_render) = connect_matching_test_shell(&mut server, 42);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    for client_id in [41, 42] {
+        server.clients.get_mut(&client_id).unwrap().cell_size =
+            crate::kitty_graphics::HostCellSize {
+                width_px: 10,
+                height_px: 20,
+            };
+    }
+    assert!(server.focus_shell_client_on_tab(42, &second_tab_id));
+    assert!(server.claim_shell_tab_geometry(42, false));
+
+    server.render_and_stream();
+    let first = recv_pane_surface(&first_render, "first selected graphics");
+    let second = recv_pane_surface(&second_render, "second selected graphics");
+    assert!(matches!(
+        first.graphics.placements[0].asset.source,
+        crate::protocol::SurfaceGraphicsSource::Terminal { image_id: 7, .. }
+    ));
+    assert_eq!(first.graphics.assets[0].data, vec![255, 0, 0, 255]);
+    assert!(matches!(
+        second.graphics.placements[0].asset.source,
+        crate::protocol::SurfaceGraphicsSource::Terminal { image_id: 7, .. }
+    ));
+    assert_eq!(second.graphics.assets[0].data, vec![0, 255, 0, 255]);
+
+    server
+        .app
+        .terminal_runtimes
+        .get(&first_terminal)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b_Ga=T,f=32,t=d,i=9,p=5,s=1,v=1,c=1,r=1,q=2;AAD//w==\x1b\\");
+    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([first_terminal,])));
+    let retained = recv_pane_surface(&first_render, "first retained graphics");
+    assert!(retained
+        .graphics
+        .placements
+        .iter()
+        .any(|placement| matches!(
+            placement.asset.source,
+            crate::protocol::SurfaceGraphicsSource::Terminal { image_id: 9, .. }
+        )));
+    assert!(second_render.try_recv().is_err());
+    shutdown_test_runtimes(&mut server);
 }
 
 #[tokio::test]
@@ -654,7 +738,7 @@ fn stream_open_gate_is_owned_by_the_layer_and_cancels_on_removal() {
     let mut server = test_headless_server();
     server.app.state.kitty_graphics_enabled = true;
     let workspace = crate::workspace::Workspace::test_new("gated");
-    let pane_id = workspace.tabs[0].root_pane;
+    let pane_id = workspace.root_pane;
     let public = format!("{}:p1", workspace.id);
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
@@ -711,7 +795,7 @@ fn stream_open_gate_is_owned_by_the_layer_and_cancels_on_removal() {
 fn stream_set_has_graphics_only_render_impact() {
     let mut server = test_headless_server();
     let workspace = crate::workspace::Workspace::test_new("graphics");
-    let pane_id = workspace.tabs[0].root_pane;
+    let pane_id = workspace.root_pane;
     let public_pane_id = format!("{}:p1", workspace.id);
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
@@ -793,7 +877,7 @@ fn stream_set_has_graphics_only_render_impact() {
 fn rejected_or_stale_requests_do_not_schedule_rendering() {
     let mut server = test_headless_server();
     let workspace = crate::workspace::Workspace::test_new("graphics");
-    let pane_id = workspace.tabs[0].root_pane;
+    let pane_id = workspace.root_pane;
     let public_pane_id = format!("{}:p1", workspace.id);
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
@@ -1058,6 +1142,7 @@ async fn client_shell_direct_graphics_uploads_without_server_authored_coordinate
         },
         &crate::kitty_graphics::surface::DeliveryCache::default(),
         1,
+        None,
     );
     assert_eq!(pending.retained_assets, vec![asset.clone()]);
 
@@ -1150,6 +1235,7 @@ async fn client_shell_direct_graphics_uploads_without_server_authored_coordinate
         },
         &crate::kitty_graphics::surface::DeliveryCache::default(),
         1,
+        None,
     );
     assert!(hidden.placements.is_empty());
     assert_eq!(hidden.retained_assets, vec![next_asset]);
@@ -1179,7 +1265,7 @@ fn direct_gate_server_with_file(
     use std::os::unix::fs::OpenOptionsExt as _;
     let mut server = test_headless_server();
     let workspace = crate::workspace::Workspace::test_new("direct-gate");
-    let pane_id = workspace.tabs[0].root_pane;
+    let pane_id = workspace.root_pane;
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     let key = graphics_key(pane_id);

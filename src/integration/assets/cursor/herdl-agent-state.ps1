@@ -1,6 +1,6 @@
 # managed by herdl; reinstalling the integration replaces this file.
 # HERDL_INTEGRATION_ID=cursor
-# HERDL_INTEGRATION_VERSION=1
+# HERDL_INTEGRATION_VERSION=2
 
 param([string]$Action = "")
 
@@ -11,7 +11,8 @@ function Exit-Hook {
 
 if ($Action -ne "session") { Exit-Hook }
 if ($env:HERDL_ENV -ne "1") { Exit-Hook }
-if ([string]::IsNullOrWhiteSpace($env:HERDL_PANE_ID)) { Exit-Hook }
+$targetId = if (![string]::IsNullOrWhiteSpace($env:HERDL_TAB_ID)) { $env:HERDL_TAB_ID } else { $env:HERDL_PANE_ID }
+if ([string]::IsNullOrWhiteSpace($targetId)) { Exit-Hook }
 
 $inputText = [Console]::In.ReadToEnd()
 $jsonStart = $inputText.IndexOf("{")
@@ -41,7 +42,7 @@ if ([string]::IsNullOrWhiteSpace($sessionId)) { Exit-Hook }
 $seq = [DateTime]::UtcNow.Ticks
 $herdl = if ([string]::IsNullOrWhiteSpace($env:HERDL_BIN_PATH)) { "herdl" } else { $env:HERDL_BIN_PATH }
 try {
-    & $herdl pane report-agent-session $env:HERDL_PANE_ID --source herdl:cursor --agent cursor --seq $seq --agent-session-id $sessionId 2>$null | Out-Null
+    & $herdl pane report-agent-session $targetId --source herdl:cursor --agent cursor --seq $seq --agent-session-id $sessionId 2>$null | Out-Null
 } catch {
 }
 

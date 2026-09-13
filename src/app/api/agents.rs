@@ -131,13 +131,7 @@ impl App {
             Ok(resolved) => resolved,
             Err(err) => return Err(encode_error_body(id, self.agent_target_error_body(err))),
         };
-        let Some(terminal_id) = self
-            .state
-            .workspaces
-            .get(resolved.ws_idx)
-            .and_then(|workspace| workspace.terminal_id(resolved.pane_id))
-            .cloned()
-        else {
+        let Some(terminal_id) = self.resolved_agent_terminal_id(&resolved) else {
             return Err(agent_not_found(id, &params.target));
         };
         let Some(terminal) = self.state.terminals.get(&terminal_id) else {
@@ -159,7 +153,7 @@ impl App {
         if terminal.managed_agent_launch_pending() {
             return Err(agent_not_ready(id, &params.target));
         }
-        let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
+        let Some(runtime) = self.resolved_agent_runtime(&resolved, &terminal_id) else {
             return Err(agent_not_found(id, &params.target));
         };
         if !super::super::agents::runtime_hosts_agent(runtime, expected_agent) {
@@ -201,7 +195,8 @@ impl App {
         } else {
             text
         };
-        let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
+        let Some(agent) = self.agent_info_at(resolved.ws_idx, resolved.pane_id, resolved.tab_idx)
+        else {
             return Err(agent_not_found(id, &params.target));
         };
         let completion = runtime
@@ -224,10 +219,13 @@ impl App {
             Ok(resolved) => resolved,
             Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
         };
-        let Some((pane, workspace_id)) = self.lookup_runtime(resolved.ws_idx, resolved.pane_id)
-        else {
+        let Some(terminal_id) = self.resolved_agent_terminal_id(&resolved) else {
             return agent_not_found(id, &params.target);
         };
+        let Some(pane) = self.resolved_agent_runtime(&resolved, &terminal_id) else {
+            return agent_not_found(id, &params.target);
+        };
+        let workspace_id = self.public_workspace_id(resolved.ws_idx);
         let snapshot = crate::app::api_helpers::read_terminal_snapshot(
             pane,
             params.source,
@@ -244,7 +242,7 @@ impl App {
                         .unwrap_or_else(|| params.target.clone()),
                     workspace_id,
                     tab_id: self
-                        .public_tab_id(resolved.ws_idx, resolved.tab_idx)
+                        .public_tab_id_for_pane(resolved.ws_idx, resolved.pane_id, resolved.tab_idx)
                         .unwrap(),
                     source: params.source,
                     format: params.format,
@@ -261,19 +259,13 @@ impl App {
             Ok(resolved) => resolved,
             Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
         };
-        let Some((pane, _workspace_id)) = self.lookup_runtime(resolved.ws_idx, resolved.pane_id)
-        else {
+        let Some(terminal_id) = self.resolved_agent_terminal_id(&resolved) else {
             return agent_not_found(id, &target.target);
         };
-        let Some(terminal_id) = self
-            .state
-            .workspaces
-            .get(resolved.ws_idx)
-            .and_then(|workspace| workspace.terminal_id(resolved.pane_id))
-        else {
+        let Some(pane) = self.resolved_agent_runtime(&resolved, &terminal_id) else {
             return agent_not_found(id, &target.target);
         };
-        let Some(terminal) = self.state.terminals.get(terminal_id) else {
+        let Some(terminal) = self.state.terminals.get(&terminal_id) else {
             return agent_not_found(id, &target.target);
         };
         if terminal.full_lifecycle_hook_authority_active() {
@@ -336,23 +328,18 @@ impl App {
             Ok(resolved) => resolved,
             Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
         };
-        let Some(terminal_id) = self
-            .state
-            .workspaces
-            .get(resolved.ws_idx)
-            .and_then(|workspace| workspace.terminal_id(resolved.pane_id))
-        else {
+        let Some(terminal_id) = self.resolved_agent_terminal_id(&resolved) else {
             return agent_not_found(id, &params.target);
         };
         let Some(expected_agent) = self
             .state
             .terminals
-            .get(terminal_id)
+            .get(&terminal_id)
             .and_then(|terminal| terminal.effective_known_agent())
         else {
             return agent_not_ready(id, &params.target);
         };
-        let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
+        let Some(runtime) = self.resolved_agent_runtime(&resolved, &terminal_id) else {
             return agent_not_found(id, &params.target);
         };
         if !super::super::agents::runtime_hosts_agent(runtime, expected_agent) {
@@ -370,6 +357,37 @@ impl App {
         }
 
         encode_success(id, ResponseResult::Ok {})
+    }
+
+    fn resolved_agent_runtime<'a>(
+        &'a self,
+        resolved: &crate::app::terminal_targets::TerminalTarget,
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> Option<&'a crate::terminal::TerminalRuntime> {
+        self.terminal_runtimes.get(terminal_id).or_else(|| {
+            let active_terminal = self
+                .state
+                .workspaces
+                .get(resolved.ws_idx)?
+                .pane_state(resolved.pane_id)?
+                .active_terminal_id();
+            (active_terminal == terminal_id)
+                .then(|| self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id))
+                .flatten()
+        })
+    }
+
+    fn resolved_agent_terminal_id(
+        &self,
+        resolved: &crate::app::terminal_targets::TerminalTarget,
+    ) -> Option<crate::terminal::TerminalId> {
+        self.state
+            .workspaces
+            .get(resolved.ws_idx)?
+            .pane_state(resolved.pane_id)?
+            .tabs
+            .get(resolved.tab_idx)
+            .map(|tab| tab.terminal_id.clone())
     }
 }
 
@@ -443,9 +461,9 @@ mod tests {
     #[tokio::test]
     async fn windows_codex_prompt_flushes_paste_burst_before_enter() {
         let mut app = app_with_agent();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
@@ -475,9 +493,9 @@ mod tests {
     #[tokio::test]
     async fn agent_prompt_sends_text_then_delays_enter() {
         let mut app = app_with_agent();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
@@ -552,9 +570,9 @@ mod tests {
     #[tokio::test]
     async fn agent_prompt_rejects_blocked_agent_without_writing() {
         let mut app = app_with_agent();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
@@ -588,9 +606,9 @@ mod tests {
     #[tokio::test]
     async fn agent_prompt_focuses_copilot_before_submitting() {
         let mut app = app_with_agent();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
@@ -627,9 +645,9 @@ mod tests {
     #[tokio::test]
     async fn agent_send_keys_validates_every_key_before_writing() {
         let mut app = app_with_agent();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
@@ -664,9 +682,9 @@ mod tests {
     #[tokio::test]
     async fn agent_prompt_rejects_managed_agent_while_startup_is_pending() {
         let mut app = app_with_agent();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         let now = std::time::Instant::now();
@@ -700,21 +718,22 @@ mod tests {
         let mut app = app_with_agent();
         app.state.outer_terminal_focus = Some(false);
 
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         app.state
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
             .set_detected_state(Some(Agent::Pi), AgentState::Idle);
-        app.state.workspaces[0].tabs[0]
+        app.state.workspaces[0]
             .panes
             .get_mut(&pane_id)
             .unwrap()
+            .active_tab_mut()
             .seen = false;
-        app.state.workspaces[0].tabs[0].layout.focus_pane(pane_id);
+        app.state.workspaces[0].layout.focus_pane(pane_id);
 
         let response = app.handle_agent_focus(
             "req".into(),
@@ -733,9 +752,9 @@ mod tests {
     #[test]
     fn agent_rename_does_not_replace_the_pane_label() {
         let mut app = app_with_agent();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_manual_label("shell-pane".into());
@@ -757,5 +776,54 @@ mod tests {
                 Some("shell-pane")
             );
         }
+    }
+
+    #[test]
+    fn inactive_pane_tab_agent_is_listed_and_focus_activates_its_terminal() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].root_pane;
+        let inactive_tab = app.state.workspaces[0].test_add_tab(Some("review"));
+        app.state.ensure_test_terminals();
+        let terminal_id = app.state.workspaces[0].pane_state(pane_id).unwrap().tabs[inactive_tab]
+            .terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_name("reviewer".into());
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
+
+        let response = app.handle_agent_list("list".into());
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::AgentList { agents } = success.result else {
+            panic!("expected agent list");
+        };
+        let listed = agents
+            .iter()
+            .find(|agent| agent.terminal_id == terminal_id.to_string())
+            .expect("inactive agent must be listed");
+        assert!(!listed.focused);
+        assert_eq!(
+            listed.tab_id,
+            app.public_tab_id_for_pane(0, pane_id, inactive_tab)
+                .unwrap()
+        );
+
+        let response = app.handle_agent_focus(
+            "focus".into(),
+            AgentTarget {
+                target: terminal_id.to_string(),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::AgentInfo { agent } = success.result else {
+            panic!("expected agent info");
+        };
+        assert!(agent.focused);
+        assert_eq!(
+            app.state.workspaces[0]
+                .pane_state(pane_id)
+                .unwrap()
+                .active_tab,
+            inactive_tab
+        );
     }
 }

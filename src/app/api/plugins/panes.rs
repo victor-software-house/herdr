@@ -151,13 +151,8 @@ impl App {
             self.state.mode = crate::app::Mode::Terminal;
         }
         if placement == PluginPanePlacement::Zoomed {
-            if let Some(tab) = self
-                .state
-                .workspaces
-                .get_mut(ws_idx)
-                .and_then(|ws| ws.tabs.get_mut(tab_idx))
-            {
-                tab.zoomed = true;
+            if let Some(workspace) = self.state.workspaces.get_mut(ws_idx) {
+                workspace.zoomed = true;
             }
         }
         self.finish_plugin_pane_open(
@@ -212,7 +207,7 @@ impl App {
             Ok(result) => result,
             Err(err) => return encode_error(id, "plugin_pane_open_failed", err.to_string()),
         };
-        let pane_id = ws.tabs[tab_idx].root_pane;
+        let pane_id = ws.layout.focused();
         if params.focus {
             self.state.switch_workspace_tab(ws_idx, tab_idx);
             self.state.mode = crate::app::Mode::Terminal;

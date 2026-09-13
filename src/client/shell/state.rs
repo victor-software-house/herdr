@@ -356,6 +356,7 @@ pub(super) enum ClientRenameTarget {
     },
     NewTab {
         workspace_id: String,
+        pane_id: Option<String>,
         default_name: String,
     },
     Tab {

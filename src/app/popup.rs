@@ -43,9 +43,10 @@ impl App {
             cwd,
             extra_env,
             geometry,
-            |pane_id, rows, cols, cwd, launch_env, app| {
+            |pane_id, terminal_id, rows, cols, cwd, launch_env, app| {
                 TerminalRuntime::spawn_shell_command(
                     pane_id,
+                    terminal_id,
                     rows,
                     cols,
                     cwd,
@@ -75,9 +76,10 @@ impl App {
             cwd,
             extra_env,
             geometry,
-            |pane_id, rows, cols, cwd, launch_env, app| {
+            |pane_id, terminal_id, rows, cols, cwd, launch_env, app| {
                 TerminalRuntime::spawn_argv_command(
                     pane_id,
+                    terminal_id,
                     rows,
                     cols,
                     cwd,
@@ -106,6 +108,7 @@ impl App {
     where
         F: FnOnce(
             PaneId,
+            TerminalId,
             u16,
             u16,
             PathBuf,
@@ -124,14 +127,13 @@ impl App {
             .workspaces
             .get(ws_idx)
             .ok_or_else(|| std::io::Error::other("active workspace disappeared"))?;
-        let active_tab = ws
-            .active_tab()
+        ws.active_tab()
             .ok_or_else(|| std::io::Error::other("active tab disappeared"))?;
         let focused_pane = ws
             .focused_pane_id()
             .ok_or_else(|| std::io::Error::other("active tab has no focused pane"))?;
         let cwd = cwd.or_else(|| {
-            active_tab.cwd_for_pane(focused_pane, &self.state.terminals, &self.terminal_runtimes)
+            ws.cwd_for_pane(focused_pane, &self.state.terminals, &self.terminal_runtimes)
         });
         let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
         let pane_id = PaneId::alloc();
@@ -152,7 +154,15 @@ impl App {
         };
         let rows = resolved_geometry.inner.height;
         let cols = resolved_geometry.inner.width;
-        let (runtime, launch_argv) = spawn(pane_id, rows, cols, cwd.clone(), &launch_env, self)?;
+        let (runtime, launch_argv) = spawn(
+            pane_id,
+            terminal_id.clone(),
+            rows,
+            cols,
+            cwd.clone(),
+            &launch_env,
+            self,
+        )?;
         let terminal = match launch_argv {
             Some(argv) => TerminalState::new(terminal_id.clone(), cwd).with_launch_argv(argv),
             None => TerminalState::new(terminal_id.clone(), cwd),

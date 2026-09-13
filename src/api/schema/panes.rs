@@ -178,6 +178,8 @@ pub struct LayoutSetSplitRatioParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LayoutDescription {
     pub workspace_id: String,
+    #[serde(default)]
+    pub pane_id: String,
     pub tab_id: String,
     pub zoomed: bool,
     pub focused_pane_id: String,
@@ -668,6 +670,8 @@ pub enum PaneZoomReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneLayoutSnapshot {
     pub workspace_id: String,
+    #[serde(default)]
+    pub pane_id: String,
     pub tab_id: String,
     pub zoomed: bool,
     pub area: PaneLayoutRect,

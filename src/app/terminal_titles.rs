@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use super::App;
-use crate::layout::PaneId;
+use crate::terminal::TerminalId;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct TerminalTitleChanges {
@@ -35,24 +35,27 @@ impl App {
 
     pub(crate) fn sync_terminal_titles(
         &mut self,
-        sources: &HashSet<PaneId>,
+        sources: &HashSet<TerminalId>,
     ) -> TerminalTitleChanges {
         if sources.is_empty() {
             return TerminalTitleChanges::default();
         }
 
         let mut observations = Vec::with_capacity(sources.len());
-        for pane_id in sources {
-            let Some((ws_idx, terminal_id)) = self
-                .find_pane(*pane_id)
-                .map(|(ws_idx, pane)| (ws_idx, pane.attached_terminal_id.clone()))
-            else {
+        for (terminal_id, location) in self
+            .state
+            .terminal_locations()
+            .filter(|(terminal_id, _)| sources.contains(*terminal_id))
+        {
+            let Some(runtime) = self.terminal_runtimes.get(terminal_id) else {
                 continue;
             };
-            let Some(runtime) = self.terminal_runtimes.get(&terminal_id) else {
-                continue;
-            };
-            observations.push((ws_idx, *pane_id, terminal_id, runtime.terminal_title()));
+            observations.push((
+                location.ws_idx,
+                location.pane_id,
+                terminal_id.clone(),
+                runtime.terminal_title(),
+            ));
         }
 
         let mut changes = TerminalTitleChanges::default();
@@ -98,9 +101,9 @@ mod tests {
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.detected_agent = Some(Agent::Claude);
@@ -108,7 +111,7 @@ mod tests {
         let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"");
         runtime.test_process_pty_bytes("\x1b]0;⠋ 修复🙂标题\x07".as_bytes());
         app.terminal_runtimes.insert(terminal_id.clone(), runtime);
-        let sources = HashSet::from([pane_id]);
+        let sources = HashSet::from([terminal_id.clone()]);
 
         assert_eq!(
             app.sync_terminal_titles(&sources),
@@ -180,15 +183,14 @@ mod tests {
         app.state.sidebar_agents.rows = vec![vec![
             crate::config::AgentSidebarToken::TerminalTitleStripped,
         ]];
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0]
-            .terminal_id(pane_id)
+            .terminal_id(app.state.workspaces[0].root_pane)
             .unwrap()
             .clone();
         let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"");
         runtime.test_process_pty_bytes(b"\x1b]0;building\x07");
-        app.terminal_runtimes.insert(terminal_id, runtime);
-        app.render_dirty.request_terminal_title(pane_id);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        app.render_dirty.request_terminal_title(&terminal_id);
 
         let changes = app.sync_pending_terminal_titles();
 

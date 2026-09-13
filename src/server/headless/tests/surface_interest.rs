@@ -74,6 +74,7 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: false,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
             writer,
         })
     );
@@ -207,11 +208,8 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
         .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, runtime_pane_id)
         .unwrap()
         .test_process_pty_bytes(b"REACTIVATED");
-    assert!(
-        server.render_retained_pane_surface_and_stream(&std::collections::HashSet::from([
-            runtime_pane_id
-        ]))
-    );
+    assert!(server
+        .render_retained_pane_surface_and_stream(&terminal_sources(&server, [runtime_pane_id],)));
     assert!(render_rx.try_recv().is_err());
 
     assert!(
@@ -290,6 +288,7 @@ async fn background_surface_activation_preserves_focused_viewer_geometry() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: false,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
             writer,
         })
     );
@@ -401,6 +400,7 @@ async fn presentation_sync_epoch_replays_modes_and_title() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
             writer,
         })
     );
@@ -515,6 +515,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
             writer: source_writer,
         })
     );
@@ -540,6 +541,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: false,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
             writer: target_writer,
         })
     );

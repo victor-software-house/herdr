@@ -306,6 +306,11 @@ impl ClientShellState {
         );
         match action {
             ClientContextMenuAction::NewTab => {
+                let pane_id = self.snapshot.as_deref().and_then(|snapshot| {
+                    (snapshot.focused_workspace_id.as_deref() == Some(workspace_id.as_str()))
+                        .then(|| snapshot.focused_pane_id.clone())
+                        .flatten()
+                });
                 if self.config.prompt_new_tab_name {
                     let default_name = (self
                         .snapshot
@@ -326,20 +331,42 @@ impl ClientShellState {
                         replace_on_type: true,
                         target: ClientRenameTarget::NewTab {
                             workspace_id,
+                            pane_id,
                             default_name,
                         },
                     }));
                 } else {
-                    self.push_endpoint_method(
+                    let method = if let Some(pane_id) = pane_id {
+                        let targeted =
+                            Method::TabCreateInPane(crate::api::schema::TabCreateInPaneParams {
+                                workspace_id: Some(workspace_id.clone()),
+                                pane_id,
+                                cwd: None,
+                                focus: true,
+                                label: None,
+                                env: Default::default(),
+                            });
+                        if self.endpoint_advertises_method(&targeted) {
+                            targeted
+                        } else {
+                            Method::TabCreate(crate::api::schema::TabCreateParams {
+                                workspace_id: Some(workspace_id),
+                                cwd: None,
+                                focus: true,
+                                label: None,
+                                env: Default::default(),
+                            })
+                        }
+                    } else {
                         Method::TabCreate(crate::api::schema::TabCreateParams {
                             workspace_id: Some(workspace_id),
                             cwd: None,
                             focus: true,
                             label: None,
                             env: Default::default(),
-                        }),
-                        outcome,
-                    );
+                        })
+                    };
+                    self.push_endpoint_method(method, outcome);
                 }
             }
             ClientContextMenuAction::Rename => {

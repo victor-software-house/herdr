@@ -84,7 +84,7 @@ impl App {
         ev: AppEvent,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
         let mut worktree_restore_failed = false;
-        let ev = match ev {
+        let mut ev = match ev {
             AppEvent::WorktreeRuntimeRestoreFailed {
                 pane_id,
                 operation_id,
@@ -93,13 +93,37 @@ impl App {
                     return Vec::new();
                 }
                 worktree_restore_failed = true;
+                let Some(terminal_id) = self
+                    .find_pane(pane_id)
+                    .map(|(_, pane)| pane.active_terminal_id().clone())
+                else {
+                    return Vec::new();
+                };
                 AppEvent::PaneDied {
                     pane_id,
+                    terminal_id,
                     exit_reason: crate::platform::ChildExitReason::Exited,
                 }
             }
             ev => ev,
         };
+        if let AppEvent::PaneDied {
+            pane_id,
+            terminal_id,
+            ..
+        } = &mut ev
+        {
+            if let Some(location) = self.state.terminal_location(terminal_id) {
+                *pane_id = location.pane_id;
+            } else if let Some(popup) = self
+                .state
+                .popup_pane
+                .as_ref()
+                .filter(|popup| popup.terminal_id == *terminal_id)
+            {
+                *pane_id = popup.pane_id;
+            }
+        }
         if matches!(
             &ev,
             AppEvent::TerminalBell { .. } | AppEvent::ClipboardWrite { .. }
@@ -167,12 +191,17 @@ impl App {
         }
 
         let mut worktree_restore_updates = Vec::new();
-        if let AppEvent::PaneDied { pane_id, .. } = &ev {
+        if let AppEvent::PaneDied {
+            pane_id,
+            terminal_id,
+            ..
+        } = &ev
+        {
             if self
                 .state
                 .popup_pane
                 .as_ref()
-                .is_some_and(|popup| popup.pane_id == *pane_id)
+                .is_some_and(|popup| popup.terminal_id == *terminal_id)
             {
                 self.close_popup_pane();
                 return Vec::new();
@@ -199,7 +228,12 @@ impl App {
                             worktree_restore_updates
                                 .extend(self.publish_worktree_runtime_agent_release(*pane_id));
                         }
-                        restore_requested && !self.respawn_shell_for_launch_pane(*pane_id, false)
+                        restore_requested
+                            && !self.respawn_shell_for_launch_terminal(
+                                *pane_id,
+                                terminal_id.clone(),
+                                false,
+                            )
                     } else {
                         false
                     };
@@ -210,14 +244,14 @@ impl App {
                 let previous_toast = self.state.toast.clone();
                 if let Some(update) = self
                     .state
-                    .publish_pane_process_exit_if_agent(*pane_id, false)
+                    .publish_terminal_process_exit_if_agent(terminal_id, false)
                 {
                     self.sync_full_lifecycle_authority_detection_pauses();
                     self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
                     self.emit_pane_state_update(&update);
                 }
-                if self.runtime_exit_action(*pane_id) == RuntimeExitAction::RespawnShell
-                    && self.respawn_shell_for_launch_pane(*pane_id, true)
+                if self.runtime_exit_action(terminal_id) == RuntimeExitAction::RespawnShell
+                    && self.respawn_shell_for_launch_terminal(*pane_id, terminal_id.clone(), true)
                 {
                     self.overlay_panes.remove(pane_id);
                     self.render_dirty.request_generic();
@@ -232,6 +266,7 @@ impl App {
             AppEvent::PaneDied {
                 pane_id,
                 exit_reason,
+                ..
             } if exit_reason.requires_session_checkpoint() && self.find_pane(*pane_id).is_some() && !self.overlay_panes.contains_key(pane_id)
         );
         if checkpointed_pane_exit {
@@ -243,14 +278,11 @@ impl App {
                 let was_overlay_active =
                     self.state
                         .is_active_pane(overlay.ws_idx, overlay.tab_idx, *pane_id);
-                let tab_before_exit = self
-                    .state
-                    .workspaces
-                    .get(overlay.ws_idx)
-                    .and_then(|ws| ws.tabs.get(overlay.tab_idx));
-                let was_overlay_focused_in_tab =
-                    tab_before_exit.is_some_and(|tab| tab.layout.focused() == *pane_id);
-                let tab_zoomed_before_exit = tab_before_exit.map(|tab| tab.zoomed);
+                let workspace_before_exit = self.state.workspaces.get(overlay.ws_idx);
+                let was_overlay_focused_in_tab = workspace_before_exit
+                    .is_some_and(|workspace| workspace.layout.focused() == *pane_id);
+                let tab_zoomed_before_exit =
+                    workspace_before_exit.map(|workspace| workspace.zoomed);
                 (
                     overlay,
                     was_overlay_active,
@@ -285,11 +317,12 @@ impl App {
 
         let released_agent = if let AppEvent::HookAgentReleased {
             pane_id,
+            terminal_id,
             known_agent,
             ..
         } = &ev
         {
-            known_agent.map(|agent| (*pane_id, agent))
+            known_agent.map(|agent| (*pane_id, terminal_id.clone(), agent))
         } else {
             None
         };
@@ -321,16 +354,25 @@ impl App {
         if let Some(agents) = manifest_update_agents {
             self.reset_agent_detection_for_agents(&agents);
         }
-        if let Some((pane_id, agent)) = released_agent {
+        if let Some((pane_id, terminal_id, agent)) = released_agent {
             if pane_updates.iter().any(|update| update.pane_id == pane_id) {
-                if let Some((ws_idx, _)) = self.find_pane(pane_id) {
-                    if let Some(runtime) = self.state.runtime_for_pane_in_workspace(
-                        &self.terminal_runtimes,
-                        ws_idx,
-                        pane_id,
-                    ) {
-                        runtime.begin_graceful_release(agent);
-                    }
+                if let Some(runtime) = self.terminal_runtimes.get(&terminal_id).or_else(|| {
+                    self.find_pane(pane_id).and_then(|(ws_idx, _)| {
+                        self.state
+                            .workspaces
+                            .get(ws_idx)
+                            .and_then(|workspace| workspace.terminal_id(pane_id))
+                            .filter(|active_terminal_id| *active_terminal_id == &terminal_id)
+                            .and_then(|_| {
+                                self.state.runtime_for_pane_in_workspace(
+                                    &self.terminal_runtimes,
+                                    ws_idx,
+                                    pane_id,
+                                )
+                            })
+                    })
+                }) {
+                    runtime.begin_graceful_release(agent);
                 }
             }
         }
@@ -429,6 +471,7 @@ impl App {
             &workspace_label,
             update.ws_idx,
             update.pane_id,
+            &update.terminal_id,
         );
         if let Some(toast) = self.state.toast.as_mut() {
             toast.context = context;
@@ -437,14 +480,12 @@ impl App {
 
     fn sync_full_lifecycle_authority_detection_pauses(&self) {
         for workspace in &self.state.workspaces {
-            for tab in &workspace.tabs {
-                for pane in tab.panes.values() {
-                    let Some(terminal) = self.state.terminals.get(&pane.attached_terminal_id)
-                    else {
+            for pane in workspace.panes.values() {
+                for tab in &pane.tabs {
+                    let Some(terminal) = self.state.terminals.get(&tab.terminal_id) else {
                         continue;
                     };
-                    let Some(runtime) = self.terminal_runtimes.get(&pane.attached_terminal_id)
-                    else {
+                    let Some(runtime) = self.terminal_runtimes.get(&tab.terminal_id) else {
                         continue;
                     };
                     runtime.set_full_lifecycle_authority_active(
@@ -469,36 +510,32 @@ impl App {
         let Some(ws) = self.state.workspaces.get_mut(overlay.ws_idx) else {
             return;
         };
-        if overlay.tab_idx >= ws.tabs.len() {
+        if overlay.tab_idx >= ws.tab_count() {
             return;
         }
 
         if !was_overlay_focused_in_tab {
             if let Some(tab_zoomed_before_exit) = tab_zoomed_before_exit {
-                ws.tabs[overlay.tab_idx].zoomed = tab_zoomed_before_exit;
+                ws.zoomed = tab_zoomed_before_exit;
             }
             return;
         }
 
         if was_overlay_active {
-            ws.active_tab = overlay.tab_idx;
+            ws.switch_tab(overlay.tab_idx);
         }
-        let tab = &mut ws.tabs[overlay.tab_idx];
-        if tab.panes.contains_key(&overlay.previous_focus) {
-            tab.layout.focus_pane(overlay.previous_focus);
+        if ws.panes.contains_key(&overlay.previous_focus) {
+            ws.layout.focus_pane(overlay.previous_focus);
         }
-        tab.zoomed = overlay.previous_zoomed;
+        ws.zoomed = overlay.previous_zoomed;
 
         if was_overlay_active && self.state.active == Some(overlay.ws_idx) {
             self.state.mode = Mode::Terminal;
         }
     }
 
-    fn runtime_exit_action(&self, pane_id: crate::layout::PaneId) -> RuntimeExitAction {
-        let Some((_, pane_state)) = self.find_pane(pane_id) else {
-            return RuntimeExitAction::ClosePane;
-        };
-        let Some(terminal) = self.state.terminals.get(&pane_state.attached_terminal_id) else {
+    fn runtime_exit_action(&self, terminal_id: &crate::terminal::TerminalId) -> RuntimeExitAction {
+        let Some(terminal) = self.state.terminals.get(terminal_id) else {
             return RuntimeExitAction::ClosePane;
         };
 
@@ -535,15 +572,15 @@ impl App {
         }
     }
 
-    fn respawn_shell_for_launch_pane(
+    fn respawn_shell_for_launch_terminal(
         &mut self,
         pane_id: crate::layout::PaneId,
+        terminal_id: crate::terminal::TerminalId,
         focus_pane: bool,
     ) -> bool {
-        let Some((ws_idx, pane_state)) = self.find_pane(pane_id) else {
+        let Some((ws_idx, _)) = self.find_pane(pane_id) else {
             return false;
         };
-        let terminal_id = pane_state.attached_terminal_id.clone();
         let Some(terminal) = self.state.terminals.get(&terminal_id) else {
             return false;
         };
@@ -554,11 +591,13 @@ impl App {
             .get(&terminal_id)
             .map(|runtime| runtime.current_size())
             .unwrap_or_else(|| self.state.estimate_pane_size());
-        let Some(launch_env) = self.pane_launch_env(ws_idx, pane_id, Vec::new()) else {
+        let Some(launch_env) = self.pane_launch_env(ws_idx, pane_id, &terminal_id, Vec::new())
+        else {
             return false;
         };
         let runtime = match crate::terminal::TerminalRuntime::spawn(
             pane_id,
+            terminal_id.clone(),
             rows,
             cols,
             cwd,
@@ -612,11 +651,14 @@ impl App {
         &mut self,
         pane_id: crate::layout::PaneId,
     ) -> Option<crate::app::actions::PaneStateUpdate> {
-        self.state.pending_agent_notifications.remove(&pane_id);
+        let terminal_id = self
+            .find_pane(pane_id)
+            .map(|(_, pane)| pane.active_terminal_id().clone())?;
+        self.state.pending_agent_notifications.remove(&terminal_id);
         let previous_toast = self.state.toast.clone();
         let update = self
             .state
-            .publish_pane_process_exit_if_agent(pane_id, true)?;
+            .publish_terminal_process_exit_if_agent(&terminal_id, true)?;
         self.sync_full_lifecycle_authority_detection_pauses();
         self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
         self.emit_pane_state_update(&update);
@@ -667,8 +709,11 @@ impl App {
             .state
             .workspaces
             .get(update.ws_idx)
-            .and_then(|ws| ws.pane_state(update.pane_id))
-            .map(|pane| pane_agent_status(update.state, pane.seen))
+            .and_then(|ws| {
+                let (pane_id, tab_idx) = ws.terminal_location(&update.terminal_id)?;
+                ws.pane_state(pane_id)?.tabs.get(tab_idx)
+            })
+            .map(|tab| pane_agent_status(update.state, tab.seen))
             .unwrap_or_else(|| pane_agent_status(update.state, update.seen));
 
         if previous_agent_status != agent_status
@@ -727,6 +772,7 @@ impl App {
                 &workspace_label,
                 ws_idx,
                 delivery.pane_id,
+                &delivery.terminal_id,
             );
             if let Some(toast) = delivery.toast.as_mut() {
                 toast.context = context.clone();
@@ -806,7 +852,10 @@ impl App {
                 workspace_id: self.public_workspace_id(ws_idx),
             },
         });
-        if let Some(tab_id) = self.public_tab_id(ws_idx, self.state.workspaces[ws_idx].active_tab) {
+        let tab_idx = self.state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .map_or(0, |pane| pane.active_tab);
+        if let Some(tab_id) = self.public_tab_id_for_pane(ws_idx, pane_id, tab_idx) {
             self.emit_event(crate::api::schema::EventEnvelope {
                 event: crate::api::schema::EventKind::TabFocused,
                 data: crate::api::schema::EventData::TabFocused {
@@ -1049,6 +1098,9 @@ impl App {
             Method::TabList(params) => return self.handle_tab_list(request.id, params),
             Method::TabGet(target) => return self.handle_tab_get(request.id, target),
             Method::TabCreate(params) => return self.handle_tab_create(request.id, params),
+            Method::TabCreateInPane(params) => {
+                return self.handle_tab_create_in_pane(request.id, params);
+            }
             Method::TabFocus(target) => return self.handle_tab_focus(request.id, target),
             Method::TabRename(params) => return self.handle_tab_rename(request.id, params),
             Method::TabMove(params) => return self.handle_tab_move(request.id, params),
@@ -1411,6 +1463,12 @@ mod tests {
         app
     }
 
+    fn test_terminal_id(app: &App, pane_id: crate::layout::PaneId) -> crate::terminal::TerminalId {
+        app.find_pane(pane_id)
+            .map(|(_, pane)| pane.active_terminal_id().clone())
+            .expect("test pane must have a terminal")
+    }
+
     #[tokio::test]
     async fn manifest_activation_event_resets_matching_agent_detection_runtime() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1423,9 +1481,9 @@ mod tests {
         );
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-reset")];
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         app.state
             .terminals
@@ -1548,9 +1606,9 @@ mod tests {
         );
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-reload")];
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
         let reset_notify = runtime.agent_detection_reset_notify_for_test();
@@ -1589,9 +1647,9 @@ mod tests {
         );
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-status")];
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
         let reset_notify = runtime.agent_detection_reset_notify_for_test();
@@ -1632,9 +1690,9 @@ mod tests {
         );
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("agent-explain")];
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         app.state
             .terminals
@@ -1677,9 +1735,9 @@ mod tests {
         );
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("agent-explain-omp")];
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         app.state
             .terminals
@@ -1719,9 +1777,9 @@ mod tests {
         );
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("process-info")];
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
+        let pane_id = app.state.workspaces[0].root_pane;
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .active_terminal_id()
             .clone();
         let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
         app.terminal_runtimes.insert(terminal_id, runtime);
@@ -1790,7 +1848,7 @@ mod tests {
 
         let mut workspace = crate::workspace::Workspace::test_new("stale");
         workspace.custom_name = None;
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
             "herdr-toast-context-{}-{}",
@@ -1820,6 +1878,7 @@ mod tests {
         let (events, _) = tokio::sync::mpsc::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
             root,
+            terminal_id.clone(),
             24,
             80,
             live_cwd.clone(),
@@ -1841,6 +1900,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id: root,
+            terminal_id: test_terminal_id(&app, root),
             agent: Some(Agent::Codex),
             state: AgentState::Working,
             visible_blocker: false,
@@ -1850,6 +1910,7 @@ mod tests {
         });
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id: root,
+            terminal_id: test_terminal_id(&app, root),
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
@@ -1883,7 +1944,7 @@ mod tests {
 
         let mut workspace = crate::workspace::Workspace::test_new("stale");
         workspace.custom_name = None;
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
             "herdr-delayed-toast-context-{}-{}",
@@ -1913,6 +1974,7 @@ mod tests {
         let (events, _) = tokio::sync::mpsc::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
             root,
+            terminal_id.clone(),
             24,
             80,
             live_cwd.clone(),
@@ -1934,6 +1996,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id: root,
+            terminal_id: test_terminal_id(&app, root),
             agent: Some(Agent::Codex),
             state: AgentState::Working,
             visible_blocker: false,
@@ -1943,6 +2006,7 @@ mod tests {
         });
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id: root,
+            terminal_id: test_terminal_id(&app, root),
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
@@ -1974,24 +2038,25 @@ mod tests {
     }
 
     #[test]
-    fn overlay_exit_preserves_focus_changed_before_exit() {
+    fn overlay_exit_restores_previous_pane_after_overlay_tab_changed() {
         let mut workspace = crate::workspace::Workspace::test_new("overlay");
-        let previous_focus = workspace.tabs[0].root_pane;
+        let previous_focus = workspace.root_pane;
         let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].zoomed = true;
+        workspace.zoomed = true;
         let new_tab = workspace.test_add_tab(Some("new"));
         workspace.switch_tab(new_tab);
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, true);
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
+            terminal_id: test_terminal_id(&app, overlay_pane),
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
-        let overlay_tab = &app.state.workspaces[0].tabs[0];
-        assert_eq!(app.state.workspaces[0].active_tab, new_tab);
-        assert_eq!(overlay_tab.layout.focused(), previous_focus);
-        assert!(overlay_tab.zoomed);
+        let workspace = &app.state.workspaces[0];
+        assert_eq!(workspace.active_tab_index(), 0);
+        assert_eq!(workspace.layout.focused(), previous_focus);
+        assert!(workspace.zoomed);
         assert!(app.overlay_panes.is_empty());
     }
 
@@ -2007,13 +2072,15 @@ mod tests {
             event_hub.clone(),
         );
         let mut workspace = crate::workspace::Workspace::test_new("pane-exit-layout");
+        let surviving_pane = workspace.root_pane;
         let dead_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
-        let tab_id = app.public_tab_id(0, 0).unwrap();
+        let tab_id = app.public_tab_id_for_pane(0, surviving_pane, 0).unwrap();
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: dead_pane,
+            terminal_id: test_terminal_id(&app, dead_pane),
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
@@ -2047,7 +2114,7 @@ mod tests {
                 event_hub.clone(),
             );
             let workspace = crate::workspace::Workspace::test_new("idle-agent-exit");
-            let pane_id = workspace.tabs[0].root_pane;
+            let pane_id = workspace.root_pane;
             let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
             app.state.workspaces = vec![workspace];
             app.state.ensure_test_terminals();
@@ -2059,6 +2126,7 @@ mod tests {
 
             app.handle_internal_event(AppEvent::StateChanged {
                 pane_id,
+                terminal_id: test_terminal_id(&app, pane_id),
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
                 visible_blocker: false,
@@ -2091,7 +2159,7 @@ mod tests {
             event_hub.clone(),
         );
         let workspace = crate::workspace::Workspace::test_new("stale-agent-exit");
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
@@ -2113,6 +2181,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id,
+            terminal_id: test_terminal_id(&app, pane_id),
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
@@ -2142,15 +2211,15 @@ mod tests {
             event_hub.clone(),
         );
         let mut workspace = crate::workspace::Workspace::test_new("overlay-layout");
-        let previous_focus = workspace.tabs[0].root_pane;
+        let previous_focus = workspace.root_pane;
         let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(previous_focus);
-        workspace.tabs[0].zoomed = true;
+        workspace.layout.focus_pane(previous_focus);
+        workspace.zoomed = true;
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.mode = Mode::Terminal;
-        let tab_id = app.public_tab_id(0, 0).unwrap();
+        let tab_id = app.public_tab_id_for_pane(0, previous_focus, 0).unwrap();
         app.overlay_panes.insert(
             overlay_pane,
             OverlayPaneState {
@@ -2164,6 +2233,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
+            terminal_id: test_terminal_id(&app, overlay_pane),
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
@@ -2182,41 +2252,43 @@ mod tests {
     #[test]
     fn overlay_exit_preserves_same_tab_focus_changed_before_exit() {
         let mut workspace = crate::workspace::Workspace::test_new("overlay");
-        let previous_focus = workspace.tabs[0].root_pane;
+        let previous_focus = workspace.root_pane;
         let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].layout.focus_pane(previous_focus);
-        workspace.tabs[0].zoomed = true;
+        workspace.layout.focus_pane(previous_focus);
+        workspace.zoomed = true;
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, false);
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
+            terminal_id: test_terminal_id(&app, overlay_pane),
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
-        let tab = &app.state.workspaces[0].tabs[0];
-        assert_eq!(app.state.workspaces[0].active_tab, 0);
-        assert_eq!(tab.layout.focused(), previous_focus);
-        assert!(tab.zoomed);
+        let workspace = &app.state.workspaces[0];
+        assert_eq!(workspace.active_tab_index(), 0);
+        assert_eq!(workspace.layout.focused(), previous_focus);
+        assert!(workspace.zoomed);
         assert!(app.overlay_panes.is_empty());
     }
 
     #[test]
     fn overlay_exit_restores_previous_focus_when_overlay_still_focused() {
         let mut workspace = crate::workspace::Workspace::test_new("overlay");
-        let previous_focus = workspace.tabs[0].root_pane;
+        let previous_focus = workspace.root_pane;
         let overlay_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
-        workspace.tabs[0].zoomed = true;
+        workspace.zoomed = true;
         let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, false);
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
+            terminal_id: test_terminal_id(&app, overlay_pane),
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
-        let tab = &app.state.workspaces[0].tabs[0];
-        assert_eq!(app.state.workspaces[0].active_tab, 0);
-        assert_eq!(tab.layout.focused(), previous_focus);
-        assert!(!tab.zoomed);
+        let workspace = &app.state.workspaces[0];
+        assert_eq!(workspace.active_tab_index(), 0);
+        assert_eq!(workspace.layout.focused(), previous_focus);
+        assert!(!workspace.zoomed);
         assert!(app.overlay_panes.is_empty());
     }
 
@@ -2232,7 +2304,7 @@ mod tests {
         );
         let workspace = crate::workspace::Workspace::test_new("restored");
         app.state.default_shell = test_support::exiting_test_command().into();
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
@@ -2252,6 +2324,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id,
+            terminal_id: test_terminal_id(&app, pane_id),
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
@@ -2285,7 +2358,7 @@ mod tests {
             crate::api::EventHub::default(),
         );
         let workspace = crate::workspace::Workspace::test_new("powershell");
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.default_shell = "powershell.exe".into();
@@ -2293,6 +2366,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id,
+            terminal_id: test_terminal_id(&app, pane_id),
             agent: Some(crate::detect::Agent::OpenCode),
             state: AgentState::Idle,
             visible_blocker: false,
@@ -2319,7 +2393,7 @@ mod tests {
             crate::api::EventHub::default(),
         );
         let workspace = crate::workspace::Workspace::test_new("powershell");
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.default_shell = "powershell.exe".into();
@@ -2342,7 +2416,7 @@ mod tests {
             crate::api::EventHub::default(),
         );
         let workspace = crate::workspace::Workspace::test_new("worktree");
-        let pane_id = workspace.tabs[0].root_pane;
+        let pane_id = workspace.root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
@@ -2404,7 +2478,7 @@ mod tests {
         let mut workspace = crate::workspace::Workspace::test_new("stale");
         workspace.custom_name = None;
         workspace.identity_cwd = "/__herdr_original__".into();
-        let root = workspace.tabs[0].root_pane;
+        let root = workspace.root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let workspace_id = workspace.id.clone();
         app.state.workspaces = vec![workspace];
@@ -2417,6 +2491,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id: root,
+            terminal_id: test_terminal_id(&app, root),
             agent: Some(Agent::Codex),
             state: AgentState::Working,
             visible_blocker: false,
@@ -2437,6 +2512,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id: root,
+            terminal_id: test_terminal_id(&app, root),
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,

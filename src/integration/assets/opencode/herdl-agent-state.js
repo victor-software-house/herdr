@@ -59,7 +59,7 @@ function request(method, params) {
 }
 
 function requestOnce(method, params) {
-  const paneId = process.env.HERDL_PANE_ID;
+  const paneId = process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID;
   const socketPath = process.env.HERDL_SOCKET_PATH;
 
   if (!paneId || !socketPath) {
@@ -122,7 +122,7 @@ export const HerDLAgentStatePlugin = async () => {
   if (
     process.env.HERDL_ENV !== "1" ||
     !process.env.HERDL_SOCKET_PATH ||
-    !process.env.HERDL_PANE_ID
+    !(process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID)
   ) {
     return {};
   }

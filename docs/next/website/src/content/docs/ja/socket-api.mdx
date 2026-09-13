@@ -169,7 +169,7 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 `layout.export` は移植可能なタブレイアウトツリーを返します。アクティブなタブをエクスポートするには `tab_id` と `pane_id` の両方を省略し、特定のタブなら `tab_id` を、そのペインを含むタブなら `pane_id` を渡します。
 
 ```json
-{"id":"req_export","method":"layout.export","params":{"tab_id":"w1:t1"}}
+{"id":"req_export","method":"layout.export","params":{"tab_id":"w1:p1:t1"}}
 ```
 
 レスポンスには `workspace_id`、`tab_id`、`zoomed`、`focused_pane_id`、`root` が含まれます。`root` は `pane` ノードと `split` ノードの BSP ツリーです。ペインノードは `pane_id`、`label`、`cwd`、argv の `command` を含められます。分割ノードは `direction` (`right` または `down`)、`ratio`、`first`、`second` を使います。
@@ -208,7 +208,7 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 `layout.set_split_ratio` は、タブレイアウト内の既存の分割比率を更新します。レスポンスは、更新済みの移植可能な `layout` を含む `type: "layout_split_ratio_set"` です。
 
 ```json
-{"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
+{"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:p1:t1","path":[],"ratio":0.6}}
 ```
 
 プロセスを起動するメソッドは `env` オブジェクトを受け付けます。Herdr はそのキー/値ペアを新しく起動されるプロセスにのみ適用します。Herdr は管理下のペインプロセスに `HERDR_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` も注入します。呼び出し側が与えた環境変数と衝突した場合、Herdr 管理の変数が権威を持ちます。
@@ -225,7 +225,7 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 `pane.move` は、実行中のペインを別のタブ、新しいタブ、または新しいワークスペースに移動します:
 
 ```json
-{"id":"req_move_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab","tab_id":"w1:t2","target_pane_id":"w1:p3","split":"right","ratio":0.5},"focus":true}}
+{"id":"req_move_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab","tab_id":"w1:p3:t2","target_pane_id":"w1:p3","split":"right","ratio":0.5},"focus":true}}
 {"id":"req_move_new_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_tab","workspace_id":"w1","label":"logs"},"focus":true}}
 {"id":"req_move_new_workspace","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_workspace","label":"logs","tab_label":"main"},"focus":true}}
 ```
@@ -523,14 +523,14 @@ Herdr はローカルソケット上の改行区切り JSON を使います。Un
 
 ## エージェント状態の報告
 
-インテグレーションは `pane.report_agent` でエージェント状態を報告します。
+インテグレーションは `pane.report_agent` でエージェント状態を報告します。`HERDR_TAB_ID` として継承した、ペイン修飾された正確なタブ ID を使います。
 
 ```json
 {
   "id": "req_1",
   "method": "pane.report_agent",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "custom:docs",
     "agent": "docs-bot",
     "state": "working",
@@ -548,13 +548,15 @@ Herdr はローカルソケット上の改行区切り JSON を使います。Un
   "id": "req_2",
   "method": "pane.report_agent_session",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "herdr:codex",
     "agent": "codex",
     "agent_session_id": "..."
   }
 }
 ```
+
+報告メソッド `pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent` は、正確なターミナル ID またはペイン修飾されたタブ ID を受け付けます。レガシーのペイン ID はタブが 1 つだけのペインで使えます。複数タブを持つペインでは、アクティブタブを選ばず、候補タブ ID とともに `pane_target_ambiguous` を返します。
 
 Herdr に保存されたネイティブセッション参照があるとき、`pane.get`、`pane.list`、`agent.get`、`agent.list` は読み取り専用の `agent_session` オブジェクトを公開します:
 
@@ -582,7 +584,7 @@ Herdr に保存されたネイティブセッション参照があるとき、`p
   "id": "req_2",
   "method": "pane.report_metadata",
   "params": {
-    "pane_id": "w1:p1",
+    "pane_id": "w1:p1:t1",
     "source": "user:claude-title",
     "agent": "claude",
     "title": "Refactor auth middleware",
@@ -686,7 +688,7 @@ herdr agent wait w1:p1 --until blocked
       "pane_id": "w1:p1",
       "terminal_id": "term_abc123",
       "workspace_id": "w1",
-      "tab_id": "w1:t1",
+      "tab_id": "w1:p1:t1",
       "focused": true,
       "agent_status": "working",
       "revision": 42

@@ -728,8 +728,7 @@ pub struct ToastNotification {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAgentNotification {
-    pub pane_id: PaneId,
-    pub workspace_id: String,
+    pub terminal_id: crate::terminal::TerminalId,
     pub agent_label: String,
     pub known_agent: Option<crate::detect::Agent>,
     pub kind: ToastKind,
@@ -739,6 +738,7 @@ pub struct PendingAgentNotification {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentNotificationDelivery {
+    pub terminal_id: crate::terminal::TerminalId,
     pub pane_id: PaneId,
     pub workspace_id: String,
     pub agent_label: String,
@@ -775,6 +775,13 @@ pub struct ProductAnnouncementState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneFocusTarget {
     pub workspace_id: String,
+    pub pane_id: PaneId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TerminalLocation {
+    pub ws_idx: usize,
+    pub tab_idx: usize,
     pub pane_id: PaneId,
 }
 
@@ -815,7 +822,8 @@ pub struct AppState {
     pub update_dismissed: bool,
     pub config_diagnostic: Option<String>,
     pub toast: Option<ToastNotification>,
-    pub pending_agent_notifications: std::collections::HashMap<PaneId, PendingAgentNotification>,
+    pub pending_agent_notifications:
+        std::collections::HashMap<crate::terminal::TerminalId, PendingAgentNotification>,
     /// Last reported focus state for the outer terminal hosting herdr.
     /// None means unsupported or not yet reported, which preserves active-pane suppression.
     pub outer_terminal_focus: Option<bool>,
@@ -941,16 +949,6 @@ impl AppState {
         if let Some(runtime) = self.workspaces.get(ws_idx)?.test_runtimes.get(&pane_id) {
             return Some(runtime);
         }
-        #[cfg(test)]
-        if let Some(runtime) = self
-            .workspaces
-            .get(ws_idx)?
-            .tabs
-            .iter()
-            .find_map(|tab| tab.runtimes.get(&pane_id))
-        {
-            return Some(runtime);
-        }
         let terminal_id = self.workspaces.get(ws_idx)?.terminal_id(pane_id)?;
         terminal_runtimes.get(terminal_id)
     }
@@ -963,17 +961,13 @@ impl AppState {
         if self.active != Some(ws_idx) {
             return false;
         }
-        let Some(tab) = self
-            .workspaces
-            .get(ws_idx)
-            .and_then(|workspace| workspace.active_tab())
-        else {
+        let Some(workspace) = self.workspaces.get(ws_idx) else {
             return false;
         };
-        if tab.zoomed {
-            tab.layout.focused() == pane_id
+        if workspace.zoomed {
+            workspace.layout.focused() == pane_id
         } else {
-            tab.layout.pane_ids().contains(&pane_id)
+            workspace.layout.pane_ids().contains(&pane_id)
         }
     }
 
@@ -983,19 +977,46 @@ impl AppState {
         tab_idx: usize,
         pane_id: crate::layout::PaneId,
     ) -> bool {
-        let Some(active_ws_idx) = self.active else {
-            return false;
-        };
-        if ws_idx != active_ws_idx {
+        if self.active != Some(ws_idx) {
             return false;
         }
-        let Some(ws) = self.workspaces.get(ws_idx) else {
+        let Some(workspace) = self.workspaces.get(ws_idx) else {
             return false;
         };
-        if tab_idx != ws.active_tab_index() {
-            return false;
-        }
-        ws.active_tab().map(|tab| tab.layout.focused()) == Some(pane_id)
+        workspace.layout.focused() == pane_id
+            && workspace
+                .pane_state(pane_id)
+                .is_some_and(|pane| pane.active_tab == tab_idx)
+    }
+
+    pub(crate) fn terminal_locations(
+        &self,
+    ) -> impl Iterator<Item = (&crate::terminal::TerminalId, TerminalLocation)> {
+        self.workspaces
+            .iter()
+            .enumerate()
+            .flat_map(|(ws_idx, workspace)| {
+                workspace.panes.iter().flat_map(move |(&pane_id, pane)| {
+                    pane.tabs.iter().enumerate().map(move |(tab_idx, tab)| {
+                        (
+                            &tab.terminal_id,
+                            TerminalLocation {
+                                ws_idx,
+                                tab_idx,
+                                pane_id,
+                            },
+                        )
+                    })
+                })
+            })
+    }
+
+    pub(crate) fn terminal_location(
+        &self,
+        terminal_id: &crate::terminal::TerminalId,
+    ) -> Option<TerminalLocation> {
+        self.terminal_locations()
+            .find_map(|(candidate, location)| (candidate == terminal_id).then_some(location))
     }
 }
 
@@ -1109,18 +1130,18 @@ impl AppState {
         }
     }
 
-    /// Populate missing `TerminalState` entries for every pane so tests that
+    /// Populate missing `TerminalState` entries for every pane-owned tab so tests that
     /// read or write terminal metadata don't need to manually create them.
     pub fn ensure_test_terminals(&mut self) {
         use crate::terminal::TerminalState;
         for ws in &self.workspaces {
-            for tab in &ws.tabs {
-                for pane in tab.panes.values() {
-                    if !self.terminals.contains_key(&pane.attached_terminal_id) {
+            for pane in ws.panes.values() {
+                for tab in &pane.tabs {
+                    if !self.terminals.contains_key(&tab.terminal_id) {
                         let cwd = ws.identity_cwd.clone();
                         self.terminals.insert(
-                            pane.attached_terminal_id.clone(),
-                            TerminalState::new(pane.attached_terminal_id.clone(), cwd),
+                            tab.terminal_id.clone(),
+                            TerminalState::new(tab.terminal_id.clone(), cwd),
                         );
                     }
                 }
@@ -1207,23 +1228,24 @@ impl AppState {
             workspace_id_to_idx.insert(ws.id.clone(), ws_idx);
             ws.assert_invariants_for_test();
 
-            for tab in &ws.tabs {
-                for (pane_id, pane) in &tab.panes {
+            for (pane_id, pane) in &ws.panes {
+                assert!(
+                    pane_ids.insert(*pane_id),
+                    "pane {:?} appears in more than one workspace",
+                    pane_id
+                );
+                for tab in &pane.tabs {
                     assert!(
-                        pane_ids.insert(*pane_id),
-                        "pane {:?} appears in more than one workspace",
-                        pane_id
+                        attached_terminal_ids.insert(tab.terminal_id.clone()),
+                        "terminal {} is attached to more than one app pane tab",
+                        tab.terminal_id
                     );
                     assert!(
-                        attached_terminal_ids.insert(pane.attached_terminal_id.clone()),
-                        "terminal {} is attached to more than one app pane",
-                        pane.attached_terminal_id
-                    );
-                    assert!(
-                        self.terminals.contains_key(&pane.attached_terminal_id),
-                        "pane {:?} is attached to missing terminal {}",
+                        self.terminals.contains_key(&tab.terminal_id),
+                        "pane {:?} tab {} is attached to missing terminal {}",
                         pane_id,
-                        pane.attached_terminal_id
+                        tab.number,
+                        tab.terminal_id
                     );
                 }
             }
@@ -1262,15 +1284,14 @@ impl AppState {
                 assert_workspace_pane(&target.workspace_id, target.pane_id, "toast target");
             }
         }
-        for (&pane_id, notification) in &self.pending_agent_notifications {
+        for (terminal_id, notification) in &self.pending_agent_notifications {
             assert_eq!(
-                pane_id, notification.pane_id,
-                "pending agent notification map key must match payload pane id"
+                terminal_id, &notification.terminal_id,
+                "pending agent notification key must match its terminal"
             );
-            assert_workspace_pane(
-                &notification.workspace_id,
-                notification.pane_id,
-                "pending agent notification",
+            assert!(
+                self.terminal_location(terminal_id).is_some(),
+                "pending agent notification must reference an attached terminal"
             );
         }
         if let Some(popup) = &self.popup_pane {
@@ -1320,20 +1341,49 @@ mod tests {
     }
 
     #[test]
+    fn terminal_location_distinguishes_exact_terminal_sources() {
+        let mut state = AppState::test_new();
+        let mut workspace = crate::workspace::Workspace::test_new("terminal-location");
+        let first_pane = workspace.root_pane;
+        let second_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        let first_terminal = workspace.terminal_id(first_pane).cloned().unwrap();
+        let second_terminal = workspace.terminal_id(second_pane).cloned().unwrap();
+        state.workspaces = vec![workspace];
+
+        assert_eq!(
+            state.terminal_location(&first_terminal),
+            Some(TerminalLocation {
+                ws_idx: 0,
+                tab_idx: 0,
+                pane_id: first_pane,
+            })
+        );
+        assert_eq!(
+            state.terminal_location(&second_terminal),
+            Some(TerminalLocation {
+                ws_idx: 0,
+                tab_idx: 0,
+                pane_id: second_pane,
+            })
+        );
+    }
+
+    #[test]
     fn agent_terminal_keeps_final_child_cursor_exposed() {
         let mut state = AppState::test_new();
         let ws = crate::workspace::Workspace::test_new("test");
-        let pane_id = ws.tabs[0].root_pane;
+        let pane_id = ws.root_pane;
+        let terminal_id = ws.panes[&pane_id].active_terminal_id().clone();
         state.terminals.insert(
-            ws.tabs[0].panes[&pane_id].attached_terminal_id.clone(),
+            terminal_id.clone(),
             crate::terminal::TerminalState::new(
-                ws.tabs[0].panes[&pane_id].attached_terminal_id.clone(),
+                terminal_id.clone(),
                 std::path::PathBuf::from("/tmp"),
             ),
         );
         state
             .terminals
-            .get_mut(&ws.tabs[0].panes[&pane_id].attached_terminal_id)
+            .get_mut(&terminal_id)
             .expect("terminal state")
             .launch_argv = Some(vec!["codex".to_string()]);
         state.workspaces = vec![ws];
@@ -1347,8 +1397,8 @@ mod tests {
         state.assert_invariants_for_test();
 
         let ws = &mut state.workspaces[0];
-        let active_public = ws.tabs[ws.active_tab].number;
-        assert_ne!(ws.active_tab + 1, active_public);
+        let active_public = ws.active_tab().expect("active tab").number;
+        assert_ne!(ws.active_tab_index() + 1, active_public);
         let new_pane = ws.test_split(ratatui::layout::Direction::Horizontal);
         assert!(ws.public_pane_number(new_pane).is_some());
         state.ensure_test_terminals();

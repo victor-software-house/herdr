@@ -66,10 +66,10 @@ Herdr はインテグレーションを 2 つの異なる方法で使います:
 
 ## 独自エージェントを統合する
 
-Herdr ペイン内で動くエージェントは、`HERDR_ENV`、`HERDR_PANE_ID`、`HERDR_BIN_PATH`、`HERDR_SOCKET_PATH` を継承します。エージェントがライフサイクルフックを提供している場合は、そのフックから Herdr の CLI を使ってセマンティックな状態を報告します:
+Herdr ペイン内で動くエージェントは、`HERDR_ENV`、`HERDR_TAB_ID`、`HERDR_PANE_ID`、`HERDR_BIN_PATH`、`HERDR_SOCKET_PATH` を継承します。`HERDR_TAB_ID` は、ペインが所有する正確なターミナルタブです。エージェントがライフサイクルフックを提供している場合は、そのフックから Herdr の CLI を使ってセマンティックな状態を報告します:
 
 ```bash
-"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_TAB_ID" \
   --source custom:my-agent \
   --agent my-agent \
   --state working
@@ -78,12 +78,12 @@ Herdr ペイン内で動くエージェントは、`HERDR_ENV`、`HERDR_PANE_ID`
 エージェントが入力待ちになったら `idle`、ユーザーの判断が必要になったら `blocked` を報告します。ブロックの説明には `--message` を使います。エージェントの終了時には、同じ source のライフサイクル権威を解放します:
 
 ```bash
-"$HERDR_BIN_PATH" pane release-agent "$HERDR_PANE_ID" \
+"$HERDR_BIN_PATH" pane release-agent "$HERDR_TAB_ID" \
   --source custom:my-agent \
   --agent my-agent
 ```
 
-Herdr の外では何もしないように、`HERDR_ENV=1` で必要な変数が存在するときだけ報告してください。`--source` はインテグレーションごとに一意かつ固定にします。報告が順不同で届く可能性がある場合は、単調増加する `--seq` を含めてください。Herdr は同じ source から届いた古いシーケンス番号を無視します。
+Herdr の外では何もしないように、`HERDR_ENV=1` で必要な変数が存在するときだけ報告してください。状態、セッション、メタデータ、クリア、解放の各報告では `HERDR_TAB_ID` を優先してください。`HERDR_PANE_ID` はタブが 1 つだけのペイン向けのレガシーフォールバックです。複数タブを持つペインへの報告は `pane_target_ambiguous` と候補タブ ID を返して失敗します。`--source` はインテグレーションごとに一意かつ固定にします。報告が順不同で届く可能性がある場合は、単調増加する `--seq` を含めてください。Herdr は同じ source から届いた古いシーケンス番号を無視します。
 
 `report-agent` に `--agent-session-id` または `--agent-session-path` を含めることも、セッション識別が状態とは独立して変わる場合に `pane report-agent-session` を使うこともできます。Herdr はその参照をペイン API とエージェント API で公開します。セッションの自動復元には、それに加えて、そのエージェントの起動方法と参照先セッションの再開方法を Herdr が把握している必要があります。
 

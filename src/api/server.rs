@@ -451,6 +451,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::WorktreeOpen(_) => "worktree.open",
         Method::WorktreeRemove(_) => "worktree.remove",
         Method::TabCreate(_) => "tab.create",
+        Method::TabCreateInPane(_) => "tab.create_in_pane",
         Method::TabList(_) => "tab.list",
         Method::TabGet(_) => "tab.get",
         Method::TabFocus(_) => "tab.focus",

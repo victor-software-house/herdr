@@ -1076,6 +1076,93 @@ pub struct ClientShellAgent {
     pub focused: bool,
 }
 
+/// Complete pane-owned topology used by `shell.snapshot.v2`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellSnapshotV2 {
+    pub boot_id: String,
+    pub revision: u64,
+    pub config_diagnostic: Option<String>,
+    pub product_announcement: Option<ClientShellProductAnnouncement>,
+    pub update_available: Option<String>,
+    pub update_install_command: String,
+    pub server_keybindings_toml: Option<String>,
+    pub latest_release_notes_available: bool,
+    pub integration_updates_available: bool,
+    pub worktree_directory: String,
+    pub release_notes: Option<ClientShellReleaseNotes>,
+    pub focused_workspace_id: Option<String>,
+    pub tab_bar_right: Vec<ClientShellTabStatusSegment>,
+    pub tab_bar_right_separator: String,
+    pub agent_view_label: Option<String>,
+    /// Exact pane-tab IDs in endpoint-defined agent order.
+    pub agent_order: Vec<String>,
+    pub workspaces: Vec<ClientShellWorkspaceV2>,
+    pub commands: Vec<ClientShellCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellWorkspaceV2 {
+    pub workspace_id: String,
+    pub new_workspace_cwd: String,
+    pub number: usize,
+    pub label: String,
+    pub custom_label: bool,
+    pub branch: Option<String>,
+    pub git_ahead_behind: Option<(usize, usize)>,
+    pub tokens: Vec<(String, String)>,
+    pub worktree: Option<ClientShellWorktree>,
+    pub focused: bool,
+    pub focused_pane_id: String,
+    pub zoomed: bool,
+    #[serde(deserialize_with = "deserialize_client_shell_agent_status")]
+    pub agent_status: crate::api::schema::AgentStatus,
+    pub panes: Vec<ClientShellPaneV2>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellPaneV2 {
+    pub pane_id: String,
+    pub active_tab_id: String,
+    pub focused: bool,
+    pub right_click_passthrough: bool,
+    pub tabs: Vec<ClientShellTabV2>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellTabV2 {
+    pub tab_id: String,
+    pub terminal_id: String,
+    pub number: usize,
+    pub label: String,
+    pub custom_label: bool,
+    pub active: bool,
+    pub cwd: Option<String>,
+    pub foreground_cwd: Option<String>,
+    #[serde(deserialize_with = "deserialize_client_shell_agent_status")]
+    pub agent_status: crate::api::schema::AgentStatus,
+    pub agent: Option<ClientShellAgentV2>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellAgentV2 {
+    pub pane_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub terminal_id: String,
+    pub name: Option<String>,
+    pub display_agent: Option<String>,
+    pub agent: Option<String>,
+    pub title: Option<String>,
+    pub terminal_title: Option<String>,
+    pub terminal_title_stripped: Option<String>,
+    #[serde(deserialize_with = "deserialize_client_shell_agent_status")]
+    pub agent_status: crate::api::schema::AgentStatus,
+    pub state_change_seq: u64,
+    pub state_labels: Vec<(String, String)>,
+    pub tokens: Vec<(String, String)>,
+    pub focused: bool,
+}
+
 /// Origin-relative geometry for one pane in a rendered pane surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneSurfacePane {

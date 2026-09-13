@@ -91,12 +91,12 @@ impl ClientShellState {
         point: (u16, u16),
         outcome: &mut ClientShellInput,
     ) -> bool {
-        let Some((endpoint_id, pane_id)) = self
+        let Some((endpoint_id, tab_id)) = self
             .hits
             .endpoint_agents
             .iter()
             .find(|(rect, _, _)| super::contains(*rect, point))
-            .map(|(_, endpoint_id, pane_id)| (endpoint_id.clone(), pane_id.clone()))
+            .map(|(_, endpoint_id, tab_id)| (endpoint_id.clone(), tab_id.clone()))
         else {
             return false;
         };
@@ -106,13 +106,13 @@ impl ClientShellState {
             outcome.repaint = true;
         } else if endpoint_id == self.active_endpoint_id {
             self.push_endpoint_method(
-                crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget { pane_id }),
+                crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget { tab_id }),
                 outcome,
             );
         } else {
             outcome.actions.push(ClientShellAction::ActivateEndpoint {
                 endpoint_id,
-                target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+                target: Some(ClientEndpointFocusTarget::Tab(tab_id)),
             });
         }
         true
@@ -203,10 +203,10 @@ impl ClientShellState {
                     let focused = self
                         .snapshot
                         .as_deref()
-                        .and_then(|snapshot| snapshot.focused_pane_id.as_deref());
+                        .and_then(|snapshot| snapshot.focused_tab_id.as_deref());
                     let current = agents.iter().position(|target| {
                         target.endpoint_id == self.active_endpoint_id
-                            && Some(target.pane_id.as_str()) == focused
+                            && Some(target.tab_id.as_str()) == focused
                     });
                     match (current, action) {
                         (Some(index), KeybindAction::PreviousAgent) => {
@@ -222,7 +222,7 @@ impl ClientShellState {
             let target = &agents[next];
             self.focus_or_activate(
                 target.endpoint_id.clone(),
-                ClientEndpointFocusTarget::Pane(target.pane_id.clone()),
+                ClientEndpointFocusTarget::Tab(target.tab_id.clone()),
                 outcome,
             );
             return true;

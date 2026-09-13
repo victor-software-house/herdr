@@ -74,7 +74,6 @@ fn wait_for_socket(path: &Path, timeout: Duration) {
     panic!("socket did not appear at {}", path.display());
 }
 
-#[cfg(target_os = "linux")]
 fn wait_for_path(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -318,6 +317,170 @@ fn ping_over_socket_returns_version() {
 }
 
 #[test]
+fn server_start_rejects_incompatible_session_versions_without_legacy_reshaping() {
+    let _lock = test_lock();
+    for version in [3, 5] {
+        let base = unique_test_dir().join(format!("v{version}"));
+        let config_home = base.join("config");
+        let runtime_dir = base.join("runtime");
+        let socket_path = runtime_dir.join("herdl.sock");
+        let data_dir = config_home.join("herdl-dev");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            data_dir.join("session.json"),
+            serde_json::json!({
+                "version": version,
+                "workspaces": [{
+                    "id": "wincompatible",
+                    "custom_name": "must-not-restore",
+                    "identity_cwd": "/tmp",
+                    "public_pane_numbers": {"10": 1},
+                    "next_public_pane_number": 2,
+                    "public_tab_numbers": [1],
+                    "next_public_tab_number": 2,
+                    "tabs": [{
+                        "layout": {"Pane": 10},
+                        "panes": {"10": {"cwd": "/tmp"}},
+                        "zoomed": false,
+                        "focused": 10,
+                        "root_pane": 10
+                    }],
+                    "active_tab": 0
+                }],
+                "active": 0,
+                "selected": 0
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+        wait_for_socket(&socket_path, Duration::from_secs(5));
+
+        let response = send_request(
+            &socket_path,
+            r#"{"product":"herdl","id":"incompatible","method":"workspace.list","params":{}}"#,
+        );
+        let workspaces = response["result"]["workspaces"].as_array().unwrap();
+
+        assert!(workspaces
+            .iter()
+            .all(|workspace| workspace["workspace_id"] != "wincompatible"));
+        assert!(workspaces
+            .iter()
+            .all(|workspace| workspace["label"] != "must-not-restore"));
+
+        cleanup_spawned_herdr(child, base);
+    }
+}
+
+#[test]
+fn cold_restart_preserves_moved_pane_alias_and_pane_qualified_tab_env() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdl.sock");
+    let env_marker = base.join("restored-tab-id");
+
+    let mut child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let source = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"product":"herdl","id":"source","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
+        ),
+    );
+    let old_pane_id = source["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"product":"herdl","id":"target","method":"workspace.create","params":{{"cwd":"{}","focus":false}}}}"#,
+            base.display()
+        ),
+    );
+    let target_tab_id = target["result"]["workspace"]["active_tab_id"]
+        .as_str()
+        .unwrap();
+    let target_pane_id = target["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    let moved = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "product": "herdl",
+            "id": "move",
+            "method": "pane.move",
+            "params": {
+                "pane_id": old_pane_id,
+                "destination": {
+                    "type": "tab",
+                    "tab_id": target_tab_id,
+                    "target_pane_id": target_pane_id,
+                    "split": "right"
+                },
+                "focus": true
+            }
+        })
+        .to_string(),
+    );
+    let current_pane_id = moved["result"]["move_result"]["pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let moved_tab_id = moved["result"]["move_result"]["pane"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(current_pane_id, old_pane_id);
+
+    let stopped = send_request(
+        &socket_path,
+        r#"{"product":"herdl","id":"stop","method":"server.stop","params":{}}"#,
+    );
+    assert_eq!(stopped["result"]["type"], "ok");
+    let pid = child.child.process_id();
+    assert!(child.child.wait().unwrap().success());
+    unregister_spawned_herdr_pid(pid);
+    drop(child);
+
+    let restarted = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let restored = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"product":"herdl","id":"get","method":"pane.get","params":{{"pane_id":"{old_pane_id}"}}}}"#
+        ),
+    );
+    assert_eq!(restored["result"]["pane"]["pane_id"], current_pane_id);
+    let tab_suffix = moved_tab_id
+        .rsplit_once(":t")
+        .map(|(_, suffix)| suffix)
+        .unwrap();
+    let expected_tab_env = format!("{current_pane_id}:t{tab_suffix}");
+    let command = format!("printf %s \"$HERDL_TAB_ID\" > {}\n", env_marker.display());
+    let sent = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "product": "herdl",
+            "id": "env",
+            "method": "pane.send_input",
+            "params": {"pane_id": old_pane_id, "text": command}
+        })
+        .to_string(),
+    );
+    assert_eq!(sent["result"]["type"], "ok");
+    wait_for_path(&env_marker, Duration::from_secs(5));
+    assert_eq!(fs::read_to_string(&env_marker).unwrap(), expected_tab_env);
+
+    cleanup_spawned_herdr(restarted, base);
+}
+
+#[test]
 fn server_reload_agent_manifests_reports_runtime_override() {
     let _lock = test_lock();
     let base = unique_test_dir();
@@ -423,9 +586,10 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
         &fs::read(config_home.join("herdl-dev/session.json")).expect("saved session"),
     )
     .expect("valid session json");
+    assert_eq!(session["version"], 4);
     assert_eq!(session["workspaces"].as_array().map(Vec::len), Some(1));
     assert_eq!(
-        session["workspaces"][0]["tabs"][0]["panes"]
+        session["workspaces"][0]["panes"]
             .as_object()
             .map(serde_json::Map::len),
         Some(1)
@@ -1274,18 +1438,16 @@ fn agent_methods_round_trip_over_socket() {
     );
     assert_eq!(sent["error"]["code"], "agent_not_ready");
 
-    let tab_created = send_request(
+    let pane_created = send_request(
         &socket_path,
         &format!(
-            r#"{{"product":"herdl","id":"agent_tab","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
-            workspace_id
+            r#"{{"product":"herdl","id":"agent_pane","method":"pane.split","params":{{"workspace_id":"{}","target_pane_id":"{}","direction":"right","focus":false}}}}"#,
+            workspace_id, pane_id
         ),
     );
-    let second_tab_id = tab_created["result"]["tab"]["tab_id"].as_str().unwrap();
-    let second_pane_id = tab_created["result"]["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap();
-    let second_terminal_id = tab_created["result"]["root_pane"]["terminal_id"]
+    let second_tab_id = pane_created["result"]["pane"]["tab_id"].as_str().unwrap();
+    let second_pane_id = pane_created["result"]["pane"]["pane_id"].as_str().unwrap();
+    let second_terminal_id = pane_created["result"]["pane"]["terminal_id"]
         .as_str()
         .unwrap();
 
@@ -1363,6 +1525,10 @@ fn tab_create_with_no_focus_preserves_active_tab() {
         .as_str()
         .unwrap()
         .to_string();
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let tab_created = send_request(
         &socket_path,
@@ -1376,7 +1542,8 @@ fn tab_create_with_no_focus_preserves_active_tab() {
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(second_tab_id, format!("{workspace_id}:t2"));
+    assert_eq!(second_tab_id, format!("{pane_id}:t2"));
+    assert_eq!(tab_created["result"]["tab"]["pane_id"], pane_id);
     assert_eq!(tab_created["result"]["tab"]["focused"], false);
 
     let tab_list = send_request(
@@ -2420,23 +2587,19 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
             base.display()
         ),
     );
-    let workspace_id = created["result"]["workspace"]["workspace_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
     let background_pane_id = created["result"]["root_pane"]["pane_id"]
         .as_str()
         .unwrap()
         .to_string();
 
-    let tab_created = send_request(
+    let foreground_workspace = send_request(
         &socket_path,
         &format!(
-            r#"{{"product":"herdl","id":"req_status_2","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
-            workspace_id
+            r#"{{"product":"herdl","id":"req_status_2","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
         ),
     );
-    assert_eq!(tab_created["result"]["type"], "tab_created");
+    assert_eq!(foreground_workspace["result"]["type"], "workspace_created");
 
     let mut reader = open_subscription(
         &socket_path,

@@ -184,16 +184,17 @@ Git 默认拒绝由其他用户拥有的仓库。如果你已独立验证该仓�
 
 ```bash
 herdr tab list [--workspace <workspace_id>]
-herdr tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]
+herdr tab create [--workspace <workspace_id>] [--pane <pane_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]
 herdr tab get <tab_id>
 herdr tab focus <tab_id>
 herdr tab rename <tab_id> <label>
+herdr tab move <tab_id> <insert_index>
 herdr tab close <tab_id>
 ```
 
-标签页是工作区内的另一个终端布局。不指定 `--workspace` 时,`tab create` 使用活动工作区;如果没有活动工作区则失败。JSON 响应中的 `.result.tab.tab_id` 和 `.result.root_pane.pane_id` 是对应 ID。
+每个窗格拥有一个有序的终端标签页栈。公开标签页 ID 包含窗格限定,例如 `w1:p2:t3`。`tab list` 返回所选工作区中每个窗格的标签页。`tab create --pane` 以该窗格为目标;省略 `--pane` 时使用所选工作区的焦点窗格;两个目标都省略时使用活动工作区的焦点窗格。兼容响应通过 `.result.tab.pane_id` 和 `.result.root_pane.pane_id` 同时公开所属窗格。`tab focus` 会聚焦所属窗格并选择该终端。`tab move` 只在所属窗格的栈内重新排序。关闭窗格唯一的标签页会关闭该窗格;如果它也是工作区唯一的窗格,工作区也会关闭。
 
-创建工作区、标签页和拆分窗格默认不改变焦点。`--focus` 选择新布局;`--no-focus` 显式表达默认行为。不指定 `--cwd` 时,新终端遵循 `terminal.new_cwd` 设置,默认跟随来源窗格或工作区。每个 `--env KEY=VALUE` 在新的根 shell 中添加或替换一个环境变量。
+创建工作区、标签页和拆分窗格默认不改变焦点。`--focus` 选择新资源;`--no-focus` 显式表达默认行为。不指定 `--cwd` 时,新终端遵循 `terminal.new_cwd` 设置,默认跟随所属窗格或工作区。每个 `--env KEY=VALUE` 在新的终端 shell 中添加或替换一个环境变量。
 
 ## 窗格
 
@@ -246,10 +247,10 @@ herdr pane run <pane_id> <command>
 
 `pane run` 会遵循当前的 bracketed paste 模式,并把文本和 Enter 作为一个原子操作提交。发送命令时优先用它,而不是 `send-text` 加 `send-keys Enter`;单独的发送操作仍是底层操作,不会提交命令。
 
-从自定义钩子上报智能体状态:
+从自定义钩子上报智能体状态。可用时请使用带窗格限定的精确标签页 ID:
 
 ```bash
-herdr pane report-agent <pane_id> \
+herdr pane report-agent <tab_or_pane_id> \
   --source ID \
   --agent LABEL \
   --state idle|working|blocked|unknown \
@@ -258,7 +259,7 @@ herdr pane report-agent <pane_id> \
   [--agent-session-id ID] \
   [--agent-session-path PATH]
 
-herdr pane report-agent-session <pane_id> \
+herdr pane report-agent-session <tab_or_pane_id> \
   --source ID \
   --agent LABEL \
   [--seq N] \
@@ -266,13 +267,13 @@ herdr pane report-agent-session <pane_id> \
   [--agent-session-path PATH] \
   [--session-start-source SOURCE]
 
-herdr pane release-agent <pane_id> \
+herdr pane release-agent <tab_or_pane_id> \
   --source ID \
   --agent LABEL \
   [--seq N]
 ```
 
-`report-agent-session` 只更新原生会话身份,不上报生命周期状态。`release-agent` 在智能体进程退出时结束该来源的生命周期权威。
+`report-agent`、`report-agent-session`、`report-metadata`、`clear-agent-authority` 和 `release-agent` 接受精确终端 ID 或带窗格限定的标签页 ID。旧版窗格 ID 仅在该窗格只有一个标签页时可用;堆叠标签页窗格会返回 `pane_target_ambiguous` 和候选标签页 ID。`report-agent-session` 只更新原生会话身份,不上报生命周期状态。`release-agent` 在智能体进程退出时结束该来源的生命周期权威。
 
 当官方集成上报了原生会话引用时,`pane get`、`pane list`、`agent get` 和 `agent list` 会包含一个只读的 `agent_session` 对象。没有存储原生会话引用时,该字段被省略。
 
@@ -281,7 +282,7 @@ herdr pane release-agent <pane_id> \
 上报仅用于展示的窗格元数据,而不接管语义状态:
 
 ```bash
-herdr pane report-metadata <pane_id> \
+herdr pane report-metadata <tab_or_pane_id> \
   --source ID \
   [--agent LABEL] \
   [--applies-to-source ID] \

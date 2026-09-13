@@ -101,6 +101,8 @@ pub enum Method {
     WorktreeRemove(WorktreeRemoveParams),
     #[serde(rename = "tab.create")]
     TabCreate(TabCreateParams),
+    #[serde(rename = "tab.create_in_pane")]
+    TabCreateInPane(TabCreateInPaneParams),
     #[serde(rename = "tab.list")]
     TabList(TabListParams),
     #[serde(rename = "tab.get")]

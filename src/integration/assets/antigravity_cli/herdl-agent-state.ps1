@@ -18,7 +18,8 @@ function Exit-Hook {
 
 if ($Action -ne "session") { Exit-Hook }
 if ($env:HERDL_ENV -ne "1") { Exit-Hook }
-if ([string]::IsNullOrWhiteSpace($env:HERDL_PANE_ID)) { Exit-Hook }
+$targetId = if (![string]::IsNullOrWhiteSpace($env:HERDL_TAB_ID)) { $env:HERDL_TAB_ID } else { $env:HERDL_PANE_ID }
+if ([string]::IsNullOrWhiteSpace($targetId)) { Exit-Hook }
 
 $inputText = [Console]::In.ReadToEnd()
 try {
@@ -38,7 +39,7 @@ try {
     $sessionArgs = @(
         "pane",
         "report-agent-session",
-        $env:HERDL_PANE_ID,
+        $targetId,
         "--source",
         "herdl:antigravity_cli",
         "--agent",

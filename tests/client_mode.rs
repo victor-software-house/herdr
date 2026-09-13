@@ -1262,21 +1262,25 @@ fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
     send_pane_shell_command(&api_socket, &pane_id, r"printf '\033]0;building\007'");
     wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=building");
 
-    let second_tab = send_json_request(
+    let second_pane = send_json_request(
         &api_socket,
         &serde_json::json!({
-            "id": "second-tab",
-            "method": "tab.create",
-            "params": {"workspace_id": workspace_id, "focus": true},
+            "id": "second-pane",
+            "method": "pane.split",
+            "params": {
+                "target_pane_id": pane_id,
+                "direction": "right",
+                "focus": true,
+            },
         })
         .to_string(),
     );
-    assert_eq!(second_tab["result"]["type"], "tab_created", "{second_tab}");
-    let second_pane_id = second_tab["result"]["root_pane"]["pane_id"]
+    assert_eq!(second_pane["result"]["type"], "pane_info", "{second_pane}");
+    let second_pane_id = second_pane["result"]["pane"]["pane_id"]
         .as_str()
         .expect("second pane id")
         .to_string();
-    wait_for_window_title(&output, "|W=space-a|T=2|P=|O=");
+    wait_for_window_title(&output, "|W=space-a|T=1|P=|O=");
     let titles_before_hidden_update = captured_window_titles(&output).len();
     send_pane_shell_command(&api_socket, &pane_id, r"printf '\033]0;hidden update\007'");
     // Intentionally consume the AppState title through a read-only request
@@ -1287,7 +1291,7 @@ fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
         &second_pane_id,
         r"printf '\033]0;foreground marker\007'",
     );
-    wait_for_window_title(&output, "|W=space-a|T=2|P=|O=foreground marker");
+    wait_for_window_title(&output, "|W=space-a|T=1|P=|O=foreground marker");
     assert!(
         captured_window_titles(&output)[titles_before_hidden_update..]
             .iter()
@@ -1619,17 +1623,38 @@ fn pane_spawn_cwd_fallback_in_server() {
     let missing_cwd = missing_cwd.to_str().expect("test cwd should be UTF-8");
     fs::create_dir_all(&data_dir).unwrap();
     let session = serde_json::json!({
-        "version": 2,
+        "version": 4,
         "workspaces": [{
+            "id": "w_missing_cwd",
             "custom_name": "missing-cwd",
+            "identity_cwd": missing_cwd,
+            "next_public_pane_number": 2,
+            "next_public_tab_number": 2,
             "layout": { "Pane": 0 },
-            "panes": { "0": { "cwd": missing_cwd } },
+            "panes": {
+                "0": {
+                    "number": 1,
+                    "tabs": [{
+                        "number": 1,
+                        "terminal_id": "term_missing_cwd",
+                        "runtime_attached": true,
+                        "seen": true,
+                        "terminal": { "cwd": missing_cwd }
+                    }],
+                    "active_tab": 0,
+                    "right_click_passthrough": false
+                }
+            },
             "zoomed": false,
             "focused": 0,
             "root_pane": 0
         }],
         "active": 0,
-        "selected": 0
+        "selected": 0,
+        "public_pane_aliases": {},
+        "sidebar_width": null,
+        "sidebar_section_split": null,
+        "collapsed_space_keys": []
     });
     fs::write(
         data_dir.join("session.json"),
@@ -1817,28 +1842,10 @@ fn client_receives_notify_on_agent_state_change() {
     let mut ws_response = String::new();
     reader.read_line(&mut ws_response).unwrap();
 
-    // Extract the workspace ID and pane ID from the response.
-    let ws_id = ws_response
-        .split('"')
-        .find(|s| s.starts_with("w_"))
-        .unwrap_or("w_1")
-        .to_string();
-
-    // Get pane list to find a pane ID.
-    let mut pane_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let pane_request = format!(
-        r#"{{"product":"herdl","id":"2","method":"pane.list","params":{{"workspace_id":"{ws_id}"}}}}"#
-    );
-    writeln!(pane_stream, "{}", pane_request).unwrap();
-    let mut pane_reader = BufReader::new(pane_stream);
-    let mut pane_response = String::new();
-    pane_reader.read_line(&mut pane_response).unwrap();
-
-    // Extract first pane ID (format: p_<ws>_<pane>).
-    let pane_id = pane_response
-        .split('"')
-        .find(|s| s.starts_with("p_"))
-        .unwrap_or("p_1_1")
+    let created: serde_json::Value = serde_json::from_str(&ws_response).unwrap();
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("root pane id")
         .to_string();
 
     // Report agent as Blocked via the API — this should trigger a

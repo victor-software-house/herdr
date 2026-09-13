@@ -1,0 +1,106 @@
+{
+  "boot_id": "boot-v2",
+  "revision": 7,
+  "config_diagnostic": null,
+  "product_announcement": null,
+  "update_available": null,
+  "update_install_command": "herdl update",
+  "server_keybindings_toml": null,
+  "latest_release_notes_available": false,
+  "integration_updates_available": false,
+  "worktree_directory": "",
+  "release_notes": null,
+  "focused_workspace_id": "w_alpha",
+  "tab_bar_right": [],
+  "tab_bar_right_separator": "",
+  "agent_view_label": null,
+  "agent_order": ["w_alpha:p1:t2"],
+  "workspaces": [
+    {
+      "workspace_id": "w_alpha",
+      "new_workspace_cwd": "/tmp",
+      "number": 1,
+      "label": "alpha",
+      "custom_label": false,
+      "branch": null,
+      "git_ahead_behind": null,
+      "tokens": [],
+      "worktree": null,
+      "focused": true,
+      "focused_pane_id": "w_alpha:p1",
+      "zoomed": false,
+      "agent_status": "working",
+      "panes": [
+        {
+          "pane_id": "w_alpha:p1",
+          "active_tab_id": "w_alpha:p1:t1",
+          "focused": true,
+          "right_click_passthrough": false,
+          "tabs": [
+            {
+              "tab_id": "w_alpha:p1:t1",
+              "terminal_id": "terminal-1",
+              "number": 1,
+              "label": "shell",
+              "custom_label": false,
+              "active": true,
+              "cwd": "/tmp",
+              "foreground_cwd": "/tmp",
+              "agent_status": "unknown",
+              "agent": null
+            },
+            {
+              "tab_id": "w_alpha:p1:t2",
+              "terminal_id": "terminal-2",
+              "number": 2,
+              "label": "agent",
+              "custom_label": true,
+              "active": false,
+              "cwd": "/tmp",
+              "foreground_cwd": "/tmp",
+              "agent_status": "working",
+              "agent": {
+                "pane_id": "w_alpha:p1",
+                "workspace_id": "w_alpha",
+                "tab_id": "w_alpha:p1:t2",
+                "terminal_id": "terminal-2",
+                "name": "worker",
+                "display_agent": "Claude",
+                "agent": "claude",
+                "title": "Implementation",
+                "terminal_title": "worker",
+                "terminal_title_stripped": "worker",
+                "agent_status": "working",
+                "state_change_seq": 9,
+                "state_labels": [],
+                "tokens": [],
+                "focused": false
+              }
+            }
+          ]
+        },
+        {
+          "pane_id": "w_alpha:p2",
+          "active_tab_id": "w_alpha:p2:t3",
+          "focused": false,
+          "right_click_passthrough": true,
+          "tabs": [
+            {
+              "tab_id": "w_alpha:p2:t3",
+              "terminal_id": "terminal-3",
+              "number": 3,
+              "label": "logs",
+              "custom_label": true,
+              "active": true,
+              "cwd": "/tmp",
+              "foreground_cwd": null,
+              "agent_status": "idle",
+              "agent": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "commands": []
+}

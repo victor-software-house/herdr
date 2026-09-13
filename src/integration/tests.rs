@@ -1290,7 +1290,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 8);
+    assert_eq!(codex.expected_version, 9);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2886,6 +2886,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             QODERCLI_HOOK_ASSET,
             QODERCLI_INTEGRATION_VERSION,
         ),
+        ("qwen", QWEN_HOOK_ASSET, QWEN_INTEGRATION_VERSION),
         ("cursor", CURSOR_HOOK_ASSET, CURSOR_INTEGRATION_VERSION),
         (
             "antigravity_cli",
@@ -2897,12 +2898,129 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_HOOK_ASSET,
             MASTRACODE_INTEGRATION_VERSION,
         ),
+        ("grok", GROK_HOOK_ASSET, GROK_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
             Some(expected_version),
             "{name} asset version must match its integration version constant"
         );
+    }
+}
+
+#[test]
+fn integration_report_assets_prefer_exact_tab_id_with_legacy_pane_fallback() {
+    for (name, asset) in [
+        ("pi", include_str!("assets/pi/herdl-agent-state.ts")),
+        ("omp", include_str!("assets/omp/herdl-agent-state.ts")),
+        (
+            "claude-sh",
+            include_str!("assets/claude/herdl-agent-state.sh"),
+        ),
+        (
+            "claude-ps1",
+            include_str!("assets/claude/herdl-agent-state.ps1"),
+        ),
+        (
+            "codex-sh",
+            include_str!("assets/codex/herdl-agent-state.sh"),
+        ),
+        (
+            "codex-ps1",
+            include_str!("assets/codex/herdl-agent-state.ps1"),
+        ),
+        ("kimi-sh", include_str!("assets/kimi/herdl-agent-state.sh")),
+        (
+            "kimi-ps1",
+            include_str!("assets/kimi/herdl-agent-state.ps1"),
+        ),
+        (
+            "copilot-sh",
+            include_str!("assets/copilot/herdl-agent-state.sh"),
+        ),
+        (
+            "copilot-ps1",
+            include_str!("assets/copilot/herdl-agent-state.ps1"),
+        ),
+        (
+            "devin-sh",
+            include_str!("assets/devin/herdl-agent-state.sh"),
+        ),
+        (
+            "devin-ps1",
+            include_str!("assets/devin/herdl-agent-state.ps1"),
+        ),
+        (
+            "droid-sh",
+            include_str!("assets/droid/herdl-agent-state.sh"),
+        ),
+        (
+            "droid-ps1",
+            include_str!("assets/droid/herdl-agent-state.ps1"),
+        ),
+        (
+            "opencode",
+            include_str!("assets/opencode/herdl-agent-state.js"),
+        ),
+        (
+            "opencode-tui",
+            include_str!("assets/opencode/herdl-tui-session.js"),
+        ),
+        ("kilo", include_str!("assets/kilo/herdl-agent-state.js")),
+        ("hermes", include_str!("assets/hermes/__init__.py")),
+        (
+            "qodercli-sh",
+            include_str!("assets/qodercli/herdl-agent-state.sh"),
+        ),
+        (
+            "qodercli-ps1",
+            include_str!("assets/qodercli/herdl-agent-state.ps1"),
+        ),
+        (
+            "qwen-sh",
+            include_str!("assets/qwen/herdl-agent-session.sh"),
+        ),
+        (
+            "qwen-ps1",
+            include_str!("assets/qwen/herdl-agent-session.ps1"),
+        ),
+        (
+            "cursor-sh",
+            include_str!("assets/cursor/herdl-agent-state.sh"),
+        ),
+        (
+            "cursor-ps1",
+            include_str!("assets/cursor/herdl-agent-state.ps1"),
+        ),
+        (
+            "antigravity-cli-sh",
+            include_str!("assets/antigravity_cli/herdl-agent-state.sh"),
+        ),
+        (
+            "antigravity-cli-ps1",
+            include_str!("assets/antigravity_cli/herdl-agent-state.ps1"),
+        ),
+        (
+            "mastracode-sh",
+            include_str!("assets/mastracode/herdl-agent-state.sh"),
+        ),
+        (
+            "mastracode-ps1",
+            include_str!("assets/mastracode/herdl-agent-state.ps1"),
+        ),
+        ("grok-sh", include_str!("assets/grok/herdl-agent-state.sh")),
+        (
+            "grok-ps1",
+            include_str!("assets/grok/herdl-agent-state.ps1"),
+        ),
+    ] {
+        let tab_id = asset
+            .find("HERDL_TAB_ID")
+            .unwrap_or_else(|| panic!("{name} must read HERDL_TAB_ID"));
+        let pane_id = asset
+            .find("HERDL_PANE_ID")
+            .unwrap_or_else(|| panic!("{name} must retain HERDL_PANE_ID fallback"));
+        assert!(tab_id < pane_id, "{name} must prefer HERDL_TAB_ID");
     }
 }
 
@@ -3261,7 +3379,7 @@ fn install_qwen_writes_session_hook_and_preserves_settings() {
     assert!(settings.get("permissions").is_some());
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
     assert!(hook_asset.contains("HERDL_INTEGRATION_ID=qwen"));
-    assert!(hook_asset.contains("HERDL_INTEGRATION_VERSION=1"));
+    assert!(hook_asset.contains("HERDL_INTEGRATION_VERSION=2"));
     assert!(hook_asset.contains("herdl:qwen"));
 
     install_qwen().unwrap();
@@ -3451,7 +3569,7 @@ fn install_cursor_uses_cursor_config_dir_env() {
 }
 
 #[test]
-fn cursor_v1_integration_status_is_current() {
+fn cursor_v1_integration_status_is_outdated() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let cursor_dir = base.join(".cursor");
@@ -3469,8 +3587,9 @@ fn cursor_v1_integration_status_is_current() {
         .iter()
         .find(|status| status.target == crate::api::schema::IntegrationTarget::Cursor)
         .expect("cursor integration status");
-    assert_eq!(cursor.state, IntegrationStatusKind::Current);
-    assert_eq!(cursor.installed_version, Some(CURSOR_INTEGRATION_VERSION));
+    assert_eq!(cursor.state, IntegrationStatusKind::Outdated);
+    assert_eq!(cursor.installed_version, Some(1));
+    assert_eq!(cursor.expected_version, CURSOR_INTEGRATION_VERSION);
 
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);

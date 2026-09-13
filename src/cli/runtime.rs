@@ -1,9 +1,10 @@
 use crate::api::schema::{
     EmptyParams, Method, PaneFocusDirectionParams, PaneInputSetParams, PaneMoveParams,
     PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams, TabTarget,
-    WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
-    WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams, WorktreeRemoveParams,
+    PaneZoomParams, Request, TabCreateInPaneParams, TabCreateParams, TabListParams, TabMoveParams,
+    TabRenameParams, TabTarget, WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams,
+    WorkspaceTarget, WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams,
+    WorktreeRemoveParams,
 };
 
 fn print_method_response(id: &'static str, method: Method) -> std::io::Result<i32> {
@@ -54,6 +55,10 @@ pub(super) fn tab_create(params: TabCreateParams) -> std::io::Result<i32> {
     print_method_response("cli:tab:create", Method::TabCreate(params))
 }
 
+pub(super) fn tab_create_in_pane(params: TabCreateInPaneParams) -> std::io::Result<i32> {
+    print_method_response("cli:tab:create_in_pane", Method::TabCreateInPane(params))
+}
+
 pub(super) fn tab_get(tab_id: String) -> std::io::Result<i32> {
     print_method_response("cli:tab:get", Method::TabGet(TabTarget { tab_id }))
 }
@@ -64,6 +69,10 @@ pub(super) fn tab_focus(tab_id: String) -> std::io::Result<i32> {
 
 pub(super) fn tab_rename(params: TabRenameParams) -> std::io::Result<i32> {
     print_method_response("cli:tab:rename", Method::TabRename(params))
+}
+
+pub(super) fn tab_move(params: TabMoveParams) -> std::io::Result<i32> {
+    print_method_response("cli:tab:move", Method::TabMove(params))
 }
 
 pub(super) fn tab_close(tab_id: String) -> std::io::Result<i32> {

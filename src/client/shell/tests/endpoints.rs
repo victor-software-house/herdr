@@ -619,8 +619,8 @@ fn aggregate_priority_uses_client_observed_recency_across_machines() {
         outcome.actions.as_slice(),
         [ClientShellAction::ActivateEndpoint {
             endpoint_id: activated,
-            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
-        }] if activated == &endpoint_id && pane_id == "pane_1"
+            target: Some(ClientEndpointFocusTarget::Tab(tab_id)),
+        }] if activated == &endpoint_id && tab_id == "tab_1"
     ));
 }
 
@@ -1256,7 +1256,7 @@ fn mobile_foreign_agent_and_workspace_targets_activate_their_endpoint() {
                 ClientMobileTarget::Agent {
                     endpoint_id: target_endpoint,
                     pane_id,
-                } if target_endpoint == &endpoint_id && pane_id == "pane_1"
+                } if target_endpoint == &endpoint_id && pane_id == "tab_1"
             )
             .then_some(*rect)
         })
@@ -1274,8 +1274,8 @@ fn mobile_foreign_agent_and_workspace_targets_activate_their_endpoint() {
         outcome.actions.as_slice(),
         [ClientShellAction::ActivateEndpoint {
             endpoint_id: activated,
-            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
-        }] if activated == &endpoint_id && pane_id == "pane_1"
+            target: Some(ClientEndpointFocusTarget::Tab(tab_id)),
+        }] if activated == &endpoint_id && tab_id == "tab_1"
     ));
 
     state.mode = ClientShellMode::Navigate;

@@ -123,12 +123,12 @@ herdr agent rename reviewer --clear
 インテグレーションは、ライフサイクル状態を意味的な状態としてのみ報告します。表示のカスタマイズは、ペインメタデータのトークンとして別に追加します。
 
 ```bash
-herdr pane report-agent w1:p1 \
+herdr pane report-agent w1:p1:t1 \
   --source custom:indexer \
   --agent docs-bot \
   --state working
 
-herdr pane report-metadata w1:p1 \
+herdr pane report-metadata w1:p1:t1 \
   --source custom:indexer-display \
   --token summary=indexing
 ```

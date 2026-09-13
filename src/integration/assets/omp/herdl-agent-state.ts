@@ -12,7 +12,7 @@ const HERDL_ENV = process.env.HERDL_ENV;
 const socketPath = process.env.HERDL_SOCKET_PATH;
 const socketEndpoint =
   process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
-const paneId = process.env.HERDL_PANE_ID;
+const paneId = process.env.HERDL_TAB_ID || process.env.HERDL_PANE_ID;
 const source = "herdl:omp";
 
 function enabled() {

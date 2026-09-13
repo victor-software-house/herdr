@@ -4,9 +4,9 @@ use crate::detect::AgentState;
 use crate::layout::PaneId;
 use crate::terminal::{TerminalId, TerminalState};
 
-use super::{Tab, Workspace};
+use super::Workspace;
 
-/// Detail info for a single pane, used by the agent detail panel.
+/// Detail info for a single logical terminal tab, used by the agent detail panel.
 pub struct PaneDetail {
     pub pane_id: PaneId,
     pub tab_idx: usize,
@@ -15,36 +15,6 @@ pub struct PaneDetail {
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
     pub tokens: HashMap<String, String>,
-}
-
-impl Tab {
-    fn pane_details(
-        &self,
-        terminals: &HashMap<TerminalId, TerminalState>,
-        tab_idx: usize,
-    ) -> Vec<PaneDetail> {
-        self.layout
-            .pane_ids()
-            .iter()
-            .filter_map(|id| {
-                let pane = self.panes.get(id)?;
-                let terminal = terminals.get(&pane.attached_terminal_id)?;
-                let agent_kind_label = terminal.effective_agent_label().map(str::to_string);
-                if terminal.agent_name.is_none() && agent_kind_label.is_none() {
-                    return None;
-                }
-                Some(PaneDetail {
-                    pane_id: *id,
-                    tab_idx,
-                    agent_kind_label,
-                    state: terminal.state,
-                    seen: pane.seen,
-                    last_agent_state_change_seq: terminal.last_agent_state_change_seq,
-                    tokens: terminal.metadata_tokens.values(),
-                })
-            })
-            .collect()
-    }
 }
 
 fn pane_attention_priority(state: AgentState, seen: bool) -> u8 {
@@ -62,23 +32,46 @@ impl Workspace {
         &self,
         terminals: &HashMap<TerminalId, TerminalState>,
     ) -> (AgentState, bool) {
-        self.tabs
-            .iter()
-            .flat_map(|tab| tab.panes.values())
-            .filter_map(|pane| {
+        self.panes
+            .values()
+            .flat_map(|pane| pane.tabs.iter())
+            .filter_map(|tab| {
                 terminals
-                    .get(&pane.attached_terminal_id)
-                    .map(|terminal| (terminal.state, pane.seen))
+                    .get(&tab.terminal_id)
+                    .map(|terminal| (terminal.state, tab.seen))
             })
             .max_by_key(|(state, seen)| pane_attention_priority(*state, *seen))
             .unwrap_or((AgentState::Unknown, true))
     }
 
     pub fn pane_details(&self, terminals: &HashMap<TerminalId, TerminalState>) -> Vec<PaneDetail> {
-        self.tabs
-            .iter()
-            .enumerate()
-            .flat_map(|(tab_idx, tab)| tab.pane_details(terminals, tab_idx))
+        self.layout
+            .pane_ids()
+            .into_iter()
+            .flat_map(|pane_id| {
+                self.panes.get(&pane_id).into_iter().flat_map(move |pane| {
+                    pane.tabs
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(tab_idx, tab)| {
+                            let terminal = terminals.get(&tab.terminal_id)?;
+                            let agent_kind_label =
+                                terminal.effective_agent_label().map(str::to_string);
+                            if terminal.agent_name.is_none() && agent_kind_label.is_none() {
+                                return None;
+                            }
+                            Some(PaneDetail {
+                                pane_id,
+                                tab_idx,
+                                agent_kind_label,
+                                state: terminal.state,
+                                seen: tab.seen,
+                                last_agent_state_change_seq: terminal.last_agent_state_change_seq,
+                                tokens: terminal.metadata_tokens.values(),
+                            })
+                        })
+                })
+            })
             .collect()
     }
 }
@@ -98,8 +91,7 @@ mod tests {
     fn aggregate_state_all_unknown() {
         let ws = Workspace::test_new("test");
         let mut terminals = HashMap::new();
-        let root = ws.tabs[0].root_pane;
-        let terminal = terminal_for_pane(&ws, root);
+        let terminal = terminal_for_pane(&ws, ws.root_pane);
         terminals.insert(terminal.id.clone(), terminal);
         let (state, seen) = ws.aggregate_state(&terminals);
         assert_eq!(state, AgentState::Unknown);
@@ -110,72 +102,57 @@ mod tests {
     fn aggregate_state_priority() {
         let mut ws = Workspace::test_new("test");
         let id2 = ws.test_split(Direction::Horizontal);
-        let root_id = ws.tabs[0]
-            .panes
-            .keys()
-            .find(|id| **id != id2)
-            .copied()
-            .unwrap();
         let mut terminals = HashMap::new();
-        let mut root_terminal = terminal_for_pane(&ws, root_id);
+        let mut root_terminal = terminal_for_pane(&ws, ws.root_pane);
         root_terminal.state = AgentState::Idle;
         terminals.insert(root_terminal.id.clone(), root_terminal);
         let mut second_terminal = terminal_for_pane(&ws, id2);
         second_terminal.state = AgentState::Working;
         terminals.insert(second_terminal.id.clone(), second_terminal);
 
-        let (state, seen) = ws.aggregate_state(&terminals);
-
-        assert_eq!(state, AgentState::Working);
-        assert!(seen);
+        assert_eq!(ws.aggregate_state(&terminals), (AgentState::Working, true));
     }
 
     #[test]
     fn aggregate_state_done_unseen_beats_working() {
         let mut ws = Workspace::test_new("test");
         let id2 = ws.test_split(Direction::Horizontal);
-        let root_id = ws.tabs[0]
-            .panes
-            .keys()
-            .find(|id| **id != id2)
-            .copied()
-            .unwrap();
         let mut terminals = HashMap::new();
-        let mut root_terminal = terminal_for_pane(&ws, root_id);
+        let mut root_terminal = terminal_for_pane(&ws, ws.root_pane);
         root_terminal.state = AgentState::Idle;
         terminals.insert(root_terminal.id.clone(), root_terminal);
         let mut second_terminal = terminal_for_pane(&ws, id2);
         second_terminal.state = AgentState::Working;
         terminals.insert(second_terminal.id.clone(), second_terminal);
-        let root = ws.tabs[0].panes.get_mut(&root_id).unwrap();
-        root.seen = false;
+        ws.panes
+            .get_mut(&ws.root_pane)
+            .unwrap()
+            .active_tab_mut()
+            .seen = false;
 
-        let (state, seen) = ws.aggregate_state(&terminals);
-
-        assert_eq!(state, AgentState::Idle);
-        assert!(!seen);
+        assert_eq!(ws.aggregate_state(&terminals), (AgentState::Idle, false));
     }
 
     #[test]
-    fn pane_details_use_tab_vector_index_not_stable_public_tab_number() {
+    fn pane_details_use_stack_index_not_stable_public_tab_number() {
         let mut ws = Workspace::test_new("test");
         let removed_tab = ws.test_add_tab(Some("removed"));
         let survivor_tab = ws.test_add_tab(Some("survivor"));
-        let survivor_pane = ws.tabs[survivor_tab].root_pane;
         assert!(ws.close_tab(removed_tab));
+        let survivor_terminal = ws.panes[&ws.root_pane].tabs[survivor_tab - 1]
+            .terminal_id
+            .clone();
 
-        let mut terminals = HashMap::new();
-        let mut terminal = terminal_for_pane(&ws, survivor_pane);
+        let mut terminal = TerminalState::new(survivor_terminal, "/tmp".into());
         terminal.detected_agent = Some(Agent::Codex);
-        terminals.insert(terminal.id.clone(), terminal);
-
+        let terminals = HashMap::from([(terminal.id.clone(), terminal)]);
         let details = ws.pane_details(&terminals);
         let survivor = details
             .iter()
-            .find(|detail| detail.pane_id == survivor_pane)
-            .expect("surviving tab agent should be listed");
+            .find(|detail| detail.pane_id == ws.root_pane)
+            .unwrap();
 
-        assert_eq!(ws.tabs[1].number, 3);
+        assert_eq!(ws.panes[&ws.root_pane].tabs[1].number, 3);
         assert_eq!(survivor.tab_idx, 1);
     }
 }
